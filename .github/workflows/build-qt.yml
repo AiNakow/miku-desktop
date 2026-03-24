@@ -55,7 +55,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             cmake ninja-build \
-            qt6-base-dev libqt6widgets6 libgl1-mesa-dev \
+            qt6-base-dev libgl1-mesa-dev \
+            libxkbcommon-dev \
             gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
             qt6-base-dev-tools
 
@@ -87,7 +88,7 @@ jobs:
         if: matrix.label == 'windows-x86_64'
         uses: jurplel/install-qt-action@v3
         with:
-          version: '6.7.0'
+          version: '6.8.1'
           host: 'windows'
           target: 'desktop'
           arch: 'win64_msvc2022_64'
@@ -97,7 +98,7 @@ jobs:
         if: matrix.label == 'windows-aarch64'
         uses: jurplel/install-qt-action@v3
         with:
-          version: '6.7.0'
+          version: '6.8.1'
           host: 'windows'
           target: 'desktop'
           arch: 'win64_msvc2022_arm64'

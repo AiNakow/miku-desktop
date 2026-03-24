@@ -12,7 +12,7 @@ set(CMAKE_AUTORCC ON)
 
 # ── Qt 6 ─────────────────────────────────────────────────────────────────────
 find_package(Qt6 REQUIRED COMPONENTS Widgets)
-qt_standard_project_setup()
+# qt_standard_project_setup() requires Qt 6.3+; AUTOMOC/AUTORCC are set above.
 
 # ── Collect sprite frames (only animation frames, no UI assets) ───────────────
 foreach(anim
