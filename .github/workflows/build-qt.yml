@@ -88,6 +88,7 @@ jobs:
           arch: 'win64_msvc2022_64'
           dir: '${{ github.workspace }}/QtHost'
           set-env: false
+          extra: '--base https://download.qt.io'
           cache: true
 
       - name: Install Qt6 (Windows aarch64) - arm64 target
@@ -99,13 +100,14 @@ jobs:
           target: 'desktop'
           arch: 'win64_msvc2022_arm64'
           dir: '${{ github.workspace }}/Qt'
+          extra: '--base https://download.qt.io'
           cache: true
 
       - name: Set QT_HOST_PATH (Windows aarch64)
         if: matrix.label == 'windows-aarch64'
         shell: bash
         run: |
-          echo "QT_HOST_PATH=${{ github.workspace }}/QtHost/6.8.1/msvc2022_64" >> $GITHUB_ENV
+          echo "QT_HOST_PATH=${{ github.workspace }}/QtHost/Qt/6.8.1/msvc2022_64" >> $GITHUB_ENV
 
       # ── Configure ────────────────────────────────────────────────────────────
       - name: Configure CMake
@@ -146,6 +148,8 @@ jobs:
           wget -q https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage
           chmod +x linuxdeploy*.AppImage
           cmake --install build --prefix AppDir/usr
+          # Resize sprite to a standard 256x256 icon size required by linuxdeploy
+          convert drawable-hdpi/def01.png -resize 256x256 MikuPet.png
           # Create a minimal .desktop file required by linuxdeploy
           cat > MikuPet.desktop << 'EOF'
           [Desktop Entry]
@@ -159,7 +163,7 @@ jobs:
             --appdir AppDir \
             --executable AppDir/usr/bin/MikuPet \
             --desktop-file MikuPet.desktop \
-            --icon-file drawable-hdpi/def01.png \
+            --icon-file MikuPet.png \
             --plugin qt \
             --output appimage
         env:
