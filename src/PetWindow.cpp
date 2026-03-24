@@ -13,6 +13,7 @@
 #include <QRandomGenerator>
 #include <QScreen>
 #include <QSettings>
+#include <QTime>
 #include <algorithm>
 #include <cmath>
 
@@ -95,13 +96,14 @@ static const QStringList s_randomPool = {
 };
 
 static const QStringList s_clickRandomPool = {
-    QStringLiteral("hello"),
     QStringLiteral("excited"),
     QStringLiteral("heart"),
     QStringLiteral("jump"),
     QStringLiteral("rotate"),
     QStringLiteral("hairflip"),
     QStringLiteral("watch"),
+    QStringLiteral("shy"),
+    QStringLiteral("question"),
     QStringLiteral("drink"),
     QStringLiteral("listenmusic"),
     QStringLiteral("notlistenmusic"),
@@ -129,6 +131,7 @@ PetWindow::PetWindow(QWidget *parent)
     : QWidget(parent)
 {
     m_startupTimestamp = QDateTime::currentMSecsSinceEpoch();
+    m_lastClickTimestamp = m_startupTimestamp;
 
     // Window: frameless, always-on-top, no taskbar entry
     setWindowFlags(Qt::FramelessWindowHint
@@ -156,6 +159,13 @@ PetWindow::PetWindow(QWidget *parent)
     m_randomTimer->setSingleShot(true);
     connect(m_randomTimer, &QTimer::timeout,
             this,          &PetWindow::onRandomTimer);
+
+        m_sleepCheckTimer = new QTimer(this);
+        m_sleepCheckTimer->setInterval(30000);
+        connect(m_sleepCheckTimer, &QTimer::timeout,
+            this,              &PetWindow::onSleepCheckTimeout);
+        m_sleepCheckTimer->start();
+
     // ── Fall-linger timer (cry after 3 s resting post-fall) ──────────────────
     m_fallLingerTimer = new QTimer(this);
     m_fallLingerTimer->setSingleShot(true);
@@ -169,7 +179,8 @@ PetWindow::PetWindow(QWidget *parent)
             this,              &PetWindow::onShakeCheckTimeout);
     setupTray();
     restorePosition();
-    goIdle();
+    m_state = State::Animating;
+    m_engine->play(QStringLiteral("hello"), [this] { goIdle(); });
 
     QTimer::singleShot(350, this, [this] { ensureVisibleNow(); });
     QTimer::singleShot(1200, this, [this] { ensureVisibleNow(); });
@@ -201,7 +212,7 @@ void PetWindow::setupTray()
     connect(actFeed,   &QAction::triggered, this, &PetWindow::doFeed);
     connect(actDance,  &QAction::triggered, this, &PetWindow::doDance);
     connect(actSleep,  &QAction::triggered, this, &PetWindow::doSleep);
-    connect(actQuit,   &QAction::triggered, qApp, &QApplication::quit);
+    connect(actQuit,   &QAction::triggered, this, &PetWindow::doQuit);
 
     m_tray->setContextMenu(menu);
     connect(m_tray, &QSystemTrayIcon::activated,
@@ -289,6 +300,13 @@ void PetWindow::updateMask()
 
 void PetWindow::mousePressEvent(QMouseEvent *event)
 {
+    if (event->button() == Qt::LeftButton || event->button() == Qt::RightButton)
+    {
+        recordClickActivity();
+        if (m_sleepLooping)
+            stopSleepLoop(false);
+    }
+
     if (event->button() == Qt::LeftButton)
     {
         if (isAngryLocked())
@@ -360,7 +378,7 @@ void PetWindow::mouseReleaseEvent(QMouseEvent *event)
 
         if (!m_movedDuringPress && elapsed < 300)
         {
-            // Short tap with no movement → random animation (includes hello)
+            // Short tap with no movement → random interaction animation
             const auto &pool = clickRandomPool();
             const QString name = pool.at(static_cast<int>(
                 QRandomGenerator::global()->bounded(static_cast<uint>(pool.size()))));
@@ -390,20 +408,12 @@ void PetWindow::mouseReleaseEvent(QMouseEvent *event)
 
 void PetWindow::contextMenuEvent(QContextMenuEvent *event)
 {
-    if (isAngryLocked())
-    {
-        event->accept();
-        return;
-    }
+    recordClickActivity();
+    if (m_sleepLooping)
+        stopSleepLoop(false);
 
-    if (m_state == State::Idle)
-    {
-        m_state = State::Animating;
-        cancelRandom();
-        const bool useShy = (QRandomGenerator::global()->bounded(2) == 0);
-        m_engine->play(useShy ? QStringLiteral("shy") : QStringLiteral("question"),
-                       [this] { goIdle(); });
-    }
+    if (m_tray && m_tray->contextMenu())
+        m_tray->contextMenu()->popup(event->globalPos());
     event->accept();
 }
 
@@ -411,6 +421,9 @@ void PetWindow::contextMenuEvent(QContextMenuEvent *event)
 
 void PetWindow::goIdle()
 {
+    if (m_sleepLooping)
+        return;
+
     m_fallLingerTimer->stop();
     m_state = State::Idle;
     m_engine->play(QStringLiteral("def"));
@@ -433,7 +446,7 @@ void PetWindow::cancelRandom()
 
 void PetWindow::onRandomTimer()
 {
-    if (isAngryLocked())
+    if (isAngryLocked() || m_sleepLooping)
     {
         scheduleRandom();
         return;
@@ -457,6 +470,9 @@ void PetWindow::onRandomTimer()
 
 void PetWindow::triggerAngry()
 {
+    if (m_sleepLooping)
+        stopSleepLoop(false);
+
     if (isAngryLocked())
         return;
 
@@ -482,6 +498,9 @@ void PetWindow::triggerAngry()
 
 void PetWindow::triggerCry()
 {
+    if (m_sleepLooping)
+        stopSleepLoop(false);
+
     if (isAngryLocked())
         return;
 
@@ -540,6 +559,10 @@ void PetWindow::onShakeCheckTimeout()
 
 void PetWindow::onTrayActivated(QSystemTrayIcon::ActivationReason reason)
 {
+    recordClickActivity();
+    if (m_sleepLooping)
+        stopSleepLoop(true);
+
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
     if (now - m_startupTimestamp < 1500)
         return;
@@ -575,6 +598,8 @@ void PetWindow::toggleVisibility()
 void PetWindow::doFeed()
 {
     if (m_state == State::Dragging || isAngryLocked()) return;
+    if (m_sleepLooping)
+        stopSleepLoop(false);
     cancelRandom();
     m_state = State::Animating;
     m_engine->play(QStringLiteral("eatcake"), [this] { goIdle(); });
@@ -583,6 +608,8 @@ void PetWindow::doFeed()
 void PetWindow::doDance()
 {
     if (m_state == State::Dragging || isAngryLocked()) return;
+    if (m_sleepLooping)
+        stopSleepLoop(false);
     cancelRandom();
     m_state = State::Animating;
     m_engine->play(QStringLiteral("rolling"), [this] { goIdle(); });
@@ -591,9 +618,95 @@ void PetWindow::doDance()
 void PetWindow::doSleep()
 {
     if (m_state == State::Dragging || isAngryLocked()) return;
+    startSleepLoop();
+}
+
+void PetWindow::doQuit()
+{
+    if (m_quitRequested)
+        return;
+
+    m_quitRequested = true;
     cancelRandom();
+    m_fallLingerTimer->stop();
+    m_shakeCheckTimer->stop();
+    if (m_sleepCheckTimer)
+        m_sleepCheckTimer->stop();
+    m_angryLocked = false;
+    m_sleepLooping = false;
+
+    if (m_tray)
+        m_tray->hide();
+
+    ensureVisibleNow();
     m_state = State::Animating;
-    m_engine->play(QStringLiteral("sleep"), [this] { goIdle(); });
+    m_engine->play(QStringLiteral("bye"), [this] {
+        savePosition();
+        qApp->quit();
+    });
+}
+
+void PetWindow::recordClickActivity()
+{
+    m_lastClickTimestamp = QDateTime::currentMSecsSinceEpoch();
+}
+
+bool PetWindow::isNightSleepWindow() const
+{
+    const int hour = QTime::currentTime().hour();
+    return hour >= kNightSleepStartHour || hour < kNightSleepEndHour;
+}
+
+void PetWindow::playSleepLoopOnce()
+{
+    if (!m_sleepLooping || m_quitRequested)
+        return;
+
+    cancelRandom();
+    m_fallLingerTimer->stop();
+    m_state = State::Animating;
+    m_engine->play(QStringLiteral("sleep"), [this] {
+        if (!m_sleepLooping || m_quitRequested)
+            return;
+        playSleepLoopOnce();
+    });
+}
+
+void PetWindow::startSleepLoop()
+{
+    if (m_sleepLooping || m_quitRequested)
+        return;
+
+    m_sleepLooping = true;
+    playSleepLoopOnce();
+}
+
+void PetWindow::stopSleepLoop(bool resumeIdle)
+{
+    if (!m_sleepLooping)
+        return;
+
+    m_sleepLooping = false;
+    if (resumeIdle && !m_quitRequested)
+        goIdle();
+}
+
+void PetWindow::onSleepCheckTimeout()
+{
+    if (m_quitRequested || m_sleepLooping || isAngryLocked())
+        return;
+
+    if (!isNightSleepWindow())
+        return;
+
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    if (now - m_lastClickTimestamp < kSleepInactivityMs)
+        return;
+
+    if (m_state == State::Dragging)
+        return;
+
+    startSleepLoop();
 }
 
 // ── Window lifecycle ─────────────────────────────────────────────────────────
@@ -601,6 +714,13 @@ void PetWindow::doSleep()
 void PetWindow::closeEvent(QCloseEvent *event)
 {
     savePosition();
+
+    if (m_quitRequested)
+    {
+        event->accept();
+        return;
+    }
+
     // If the tray is still visible, hide instead of destroying
     if (m_tray && m_tray->isVisible())
     {

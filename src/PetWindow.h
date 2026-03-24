@@ -16,11 +16,12 @@ class AnimationEngine;
  * Key features:
  *  - WA_TranslucentBackground + setMask(QBitmap) for pixel-accurate
  *    click-through on transparent areas (cross-platform, no platform #ifdefs)
- *  - Left-click  → "hello" animation
+ *  - Startup     → "hello" animation
+ *  - Left-click  → random interaction animation
  *  - 4× left-click within 1 s → "angry" animation
  *  - Left-drag   → window dragging with lift/fall animations
  *  - Shaking during drag (> 3 s) → "dizzy" after drop
- *  - Right-click → shy / question (random)
+ *  - Right-click → open tray menu
  *  - System tray with feed / dance / sleep / toggle / quit
  *  - Random idle animations every 30–120 s
  *  - "cry" triggered after 3 s idle following a fall, or after 5 angry events
@@ -44,10 +45,12 @@ protected:
 private slots:
     void onFrameChanged(const QPixmap &pixmap);
     void onRandomTimer();
+    void onSleepCheckTimeout();
     void onTrayActivated(QSystemTrayIcon::ActivationReason reason);
     void doFeed();
     void doDance();
     void doSleep();
+    void doQuit();
     void toggleVisibility();
     void onFallLingerTimeout();
     void onShakeCheckTimeout();
@@ -64,6 +67,11 @@ private:
     void restorePosition();
     void triggerAngry();
     void triggerCry();
+    void recordClickActivity();
+    void startSleepLoop();
+    void stopSleepLoop(bool resumeIdle);
+    void playSleepLoopOnce();
+    bool isNightSleepWindow() const;
     void ensureVisibleNow();
     bool isAngryLocked() const;
 
@@ -71,6 +79,8 @@ private:
     AnimationEngine   *m_engine{nullptr};
     QSystemTrayIcon   *m_tray{nullptr};
     QTimer            *m_randomTimer{nullptr};
+    /// Checks inactivity and local time to trigger auto-sleep loop at night
+    QTimer            *m_sleepCheckTimer{nullptr};
     /// Fires 3 s after a fall animation completes to trigger cry
     QTimer            *m_fallLingerTimer{nullptr};
     /// Samples cursor position every 200 ms while dragging to detect shaking
@@ -108,6 +118,13 @@ private:
     int m_angryTriggerCount{0}; ///< how many times angry has been triggered
     static constexpr int kCryAfterAngryCount = 5;
     qint64 m_startupTimestamp{0};
+    bool m_quitRequested{false};
+    bool m_sleepLooping{false};
+    qint64 m_lastClickTimestamp{0};
+
+    static constexpr int    kNightSleepStartHour = 21;
+    static constexpr int    kNightSleepEndHour   = 7;
+    static constexpr qint64 kSleepInactivityMs   = 10 * 60 * 1000;
 
     // ── Random pool ─────────────────────────────────────────────────────────
     static const QStringList &randomPool();
