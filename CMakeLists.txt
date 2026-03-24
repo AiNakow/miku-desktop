@@ -5,6 +5,27 @@ project(MikuPet
     DESCRIPTION "Hatsune Miku Desktop Pet"
     LANGUAGES CXX)
 
+set(MIKUPET_VERSION_OVERRIDE "" CACHE STRING "Override app/package version (e.g. 0.1.1)")
+set(MIKUPET_TAG "" CACHE STRING "Build tag for package naming (e.g. v0.1.1)")
+
+set(MIKUPET_VERSION "${PROJECT_VERSION}")
+if(MIKUPET_VERSION_OVERRIDE)
+  set(MIKUPET_VERSION "${MIKUPET_VERSION_OVERRIDE}")
+endif()
+
+set(MIKUPET_ARCH "${CMAKE_SYSTEM_PROCESSOR}")
+set(MIKUPET_DEB_ARCH "${CMAKE_SYSTEM_PROCESSOR}")
+set(MIKUPET_RPM_ARCH "${CMAKE_SYSTEM_PROCESSOR}")
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
+  set(MIKUPET_ARCH "x86_64")
+  set(MIKUPET_DEB_ARCH "amd64")
+  set(MIKUPET_RPM_ARCH "x86_64")
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64|ARM64)$")
+  set(MIKUPET_ARCH "aarch64")
+  set(MIKUPET_DEB_ARCH "arm64")
+  set(MIKUPET_RPM_ARCH "aarch64")
+endif()
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
@@ -36,8 +57,8 @@ if(WIN32)
       ${PLATFORM_SOURCES})
 elseif(APPLE)
   set(MACOSX_BUNDLE_GUI_IDENTIFIER "com.mikupet.app")
-  set(MACOSX_BUNDLE_BUNDLE_VERSION  ${PROJECT_VERSION})
-  set(MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION})
+  set(MACOSX_BUNDLE_BUNDLE_VERSION  ${MIKUPET_VERSION})
+  set(MACOSX_BUNDLE_SHORT_VERSION_STRING ${MIKUPET_VERSION})
   qt_add_executable(MikuPet MACOSX_BUNDLE
       src/main.cpp
       src/AnimationEngine.h
@@ -62,7 +83,7 @@ qt_add_resources(MikuPet "sprites"
 target_link_libraries(MikuPet PRIVATE Qt6::Widgets)
 
 target_compile_definitions(MikuPet PRIVATE
-    APP_VERSION="${PROJECT_VERSION}")
+  APP_VERSION="${MIKUPET_VERSION}")
 
 if(WIN32)
   get_target_property(_qmake_executable Qt6::qmake IMPORTED_LOCATION)
@@ -105,11 +126,17 @@ endif()
 
 # ── CPack packaging ───────────────────────────────────────────────────────────
 set(CPACK_PACKAGE_NAME             "MikuPet")
-set(CPACK_PACKAGE_VERSION          "${PROJECT_VERSION}")
+set(CPACK_PACKAGE_VERSION          "${MIKUPET_VERSION}")
 set(CPACK_PACKAGE_VENDOR           "MikuPet")
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Hatsune Miku Desktop Pet")
 set(CPACK_PACKAGE_INSTALL_DIRECTORY   "MikuPet")
 set(CPACK_VERBATIM_VARIABLES          ON)
+
+if(MIKUPET_TAG)
+  set(CPACK_PACKAGE_FILE_NAME "MikuPet-${MIKUPET_TAG}-${CMAKE_SYSTEM_NAME}-${MIKUPET_ARCH}")
+else()
+  set(CPACK_PACKAGE_FILE_NAME "MikuPet-${MIKUPET_VERSION}-${CMAKE_SYSTEM_NAME}-${MIKUPET_ARCH}")
+endif()
 
 if(WIN32)
   set(CPACK_GENERATOR "NSIS;ZIP")
@@ -122,12 +149,16 @@ if(WIN32)
     "Delete '$SMPROGRAMS\\\\MikuPet\\\\MikuPet.lnk'")
 elseif(APPLE)
   set(CPACK_GENERATOR "DragNDrop")
-  set(CPACK_DMG_VOLUME_NAME "MikuPet ${PROJECT_VERSION}")
+  set(CPACK_DMG_VOLUME_NAME "MikuPet ${MIKUPET_VERSION}")
 else()
   set(CPACK_GENERATOR "DEB;RPM;TXZ")
+  set(CPACK_DEBIAN_FILE_NAME            DEB-DEFAULT)
+  set(CPACK_DEBIAN_PACKAGE_ARCHITECTURE "${MIKUPET_DEB_ARCH}")
   set(CPACK_DEBIAN_PACKAGE_MAINTAINER  "MikuPet <noreply@mikupet>")
   set(CPACK_DEBIAN_PACKAGE_DEPENDS     "libqt6widgets6 (>= 6.4)")
   set(CPACK_DEBIAN_PACKAGE_SECTION     "misc")
+  set(CPACK_RPM_FILE_NAME               RPM-DEFAULT)
+  set(CPACK_RPM_PACKAGE_ARCHITECTURE    "${MIKUPET_RPM_ARCH}")
   set(CPACK_RPM_PACKAGE_REQUIRES       "qt6-qtbase >= 6.4")
   set(CPACK_RPM_PACKAGE_LICENSE        "MIT")
 endif()

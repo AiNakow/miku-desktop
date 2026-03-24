@@ -120,9 +120,15 @@ jobs:
           if [[ -n "${QT_HOST_PATH}" ]]; then
             HOST_EXTRA="-DQT_HOST_PATH=$(cygpath -m "${QT_HOST_PATH}")"
           fi
+
+          BUILD_TAG="${GITHUB_REF_NAME}"
+          BUILD_VERSION="${BUILD_TAG#v}"
+
           cmake -B build \
             -G "${{ matrix.cmake_generator }}" \
             -DCMAKE_BUILD_TYPE=Release \
+            -DMIKUPET_TAG="${BUILD_TAG}" \
+            -DMIKUPET_VERSION_OVERRIDE="${BUILD_VERSION}" \
             ${HOST_EXTRA} \
             ${{ matrix.cmake_extra }}
 
@@ -215,16 +221,16 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: miku-pet-qt-${{ matrix.label }}
+          name: miku-pet-${{ github.ref_name }}-${{ matrix.label }}
           path: |
             build/deploy/
             build/*.msi
-            build/*.zip
+            build/*-portable.zip
             build/*.deb
             build/*.rpm
             build/*.tar.xz
             build/*.dmg
-            *.AppImage
+            MikuPet*.AppImage
           if-no-files-found: ignore
           retention-days: 14
 
@@ -254,12 +260,11 @@ jobs:
 
           add_if_exists "build/MikuPet-${{ github.ref_name }}-${{ matrix.label }}-portable.zip"
           add_glob_files "build/*.exe"
-          add_glob_files "build/*.zip"
           add_glob_files "build/*.deb"
           add_glob_files "build/*.rpm"
           add_glob_files "build/*.tar.xz"
           add_glob_files "build/*.dmg"
-          add_glob_files "*.AppImage"
+          add_glob_files "MikuPet*.AppImage"
 
           {
             echo "files<<EOF"
