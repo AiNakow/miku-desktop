@@ -1,0 +1,189 @@
+name: Build MikuPet (Qt)
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # ── Linux x86_64 ────────────────────────────────────────────────────
+          - os: ubuntu-22.04
+            label: linux-x86_64
+            cmake_extra: ""
+
+          # ── Linux aarch64 (cross-compile) ────────────────────────────────────
+          - os: ubuntu-22.04
+            label: linux-aarch64
+            cmake_extra: >-
+              -DCMAKE_TOOLCHAIN_FILE=$GITHUB_WORKSPACE/cmake/toolchain-aarch64-linux.cmake
+              -DCMAKE_CROSSCOMPILING=ON
+
+          # ── Windows x86_64 ──────────────────────────────────────────────────
+          - os: windows-latest
+            label: windows-x86_64
+            cmake_extra: ""
+
+          # ── Windows aarch64 ─────────────────────────────────────────────────
+          - os: windows-latest
+            label: windows-aarch64
+            cmake_extra: >-
+              -A ARM64
+
+          # ── macOS Universal ──────────────────────────────────────────────────
+          - os: macos-latest
+            label: macos-universal
+            cmake_extra: >-
+              -DCMAKE_OSX_ARCHITECTURES="x86_64;arm64"
+
+    runs-on: ${{ matrix.os }}
+    name: ${{ matrix.label }}
+
+    steps:
+      # ── Checkout ─────────────────────────────────────────────────────────────
+      - uses: actions/checkout@v4
+
+      # ── Linux: install Qt6 + CMake + cross-compilation tools ─────────────────
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake ninja-build \
+            qt6-base-dev libqt6widgets6 libgl1-mesa-dev \
+            gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
+            qt6-base-dev-tools
+
+      # ── Write aarch64 toolchain file (Linux only) ────────────────────────────
+      - name: Write aarch64 toolchain
+        if: matrix.label == 'linux-aarch64'
+        run: |
+          mkdir -p cmake
+          cat > cmake/toolchain-aarch64-linux.cmake << 'EOF'
+          set(CMAKE_SYSTEM_NAME Linux)
+          set(CMAKE_SYSTEM_PROCESSOR aarch64)
+          set(CMAKE_C_COMPILER   aarch64-linux-gnu-gcc)
+          set(CMAKE_CXX_COMPILER aarch64-linux-gnu-g++)
+          set(CMAKE_FIND_ROOT_PATH /usr/aarch64-linux-gnu)
+          set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
+          set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
+          set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
+          EOF
+
+      # ── macOS: install Qt6 via Homebrew ───────────────────────────────────────
+      - name: Install macOS dependencies
+        if: runner.os == 'macOS'
+        run: |
+          brew install cmake ninja qt6
+          echo "CMAKE_PREFIX_PATH=$(brew --prefix qt6)" >> $GITHUB_ENV
+
+      # ── Windows: install Qt6 via aqtinstall ──────────────────────────────────
+      - name: Install Qt6 (Windows x86_64)
+        if: matrix.label == 'windows-x86_64'
+        uses: jurplel/install-qt-action@v3
+        with:
+          version: '6.7.0'
+          host: 'windows'
+          target: 'desktop'
+          arch: 'win64_msvc2022_64'
+          cache: true
+
+      - name: Install Qt6 (Windows aarch64)
+        if: matrix.label == 'windows-aarch64'
+        uses: jurplel/install-qt-action@v3
+        with:
+          version: '6.7.0'
+          host: 'windows'
+          target: 'desktop'
+          arch: 'win64_msvc2022_arm64'
+          cache: true
+
+      # ── Configure ────────────────────────────────────────────────────────────
+      - name: Configure CMake
+        shell: bash
+        run: |
+          cmake -B build \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            ${{ matrix.cmake_extra }}
+
+      # ── Build ─────────────────────────────────────────────────────────────────
+      - name: Build
+        run: cmake --build build --parallel --config Release
+
+      # ── Deploy Qt runtime ─────────────────────────────────────────────────────
+      - name: Deploy Qt runtime (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          mkdir -p build/deploy
+          cp build/MikuPet.exe build/deploy/
+          windeployqt --release --no-translations build/deploy/MikuPet.exe
+
+      - name: Deploy Qt runtime (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          macdeployqt build/MikuPet.app -dmg
+
+      - name: Create AppImage (Linux x86_64)
+        if: matrix.label == 'linux-x86_64'
+        run: |
+          wget -q https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          wget -q https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage
+          chmod +x linuxdeploy*.AppImage
+          cmake --install build --prefix AppDir/usr
+          ./linuxdeploy-x86_64.AppImage \
+            --appdir AppDir \
+            --executable AppDir/usr/bin/MikuPet \
+            --desktop-file /dev/null \
+            --plugin qt \
+            --output appimage
+        env:
+          QMAKE: /usr/lib/qt6/bin/qmake
+          VERSION: ${{ github.ref_name }}
+
+      # ── Package (CPack) ───────────────────────────────────────────────────────
+      - name: Package (CPack)
+        if: runner.os == 'Windows' || runner.os == 'Linux'
+        working-directory: build
+        run: cpack -C Release
+
+      # ── Upload artifacts ───────────────────────────────────────────────────────
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: miku-pet-qt-${{ matrix.label }}
+          path: |
+            build/*.exe
+            build/*.msi
+            build/*.zip
+            build/*.deb
+            build/*.rpm
+            build/*.tar.xz
+            build/*.dmg
+            *.AppImage
+          if-no-files-found: ignore
+          retention-days: 14
+
+      # ── Create GitHub Release on tag ──────────────────────────────────────────
+      - name: Upload to Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          files: |
+            build/*.exe
+            build/*.msi
+            build/*.zip
+            build/*.deb
+            build/*.rpm
+            build/*.tar.xz
+            build/*.dmg
+            *.AppImage
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
