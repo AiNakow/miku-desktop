@@ -6,13 +6,75 @@
 #include <QCloseEvent>
 #include <QContextMenuEvent>
 #include <QDateTime>
+#include <QGuiApplication>
 #include <QMenu>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QRandomGenerator>
 #include <QScreen>
 #include <QSettings>
+#include <algorithm>
 #include <cmath>
+
+namespace
+{
+QPoint clampToVisibleArea(const QPoint &candidate, const QSize &windowSize)
+{
+    const auto screens = QGuiApplication::screens();
+    if (screens.isEmpty())
+        return candidate;
+
+    const QPoint center = candidate + QPoint(windowSize.width() / 2, windowSize.height() / 2);
+    QScreen *targetScreen = QGuiApplication::screenAt(center);
+    if (!targetScreen)
+        targetScreen = QGuiApplication::screenAt(candidate);
+    if (!targetScreen)
+        targetScreen = QGuiApplication::primaryScreen();
+    if (!targetScreen)
+        return candidate;
+
+    const QRect avail = targetScreen->availableGeometry();
+    const int minX = avail.left();
+    const int minY = avail.top();
+    const int maxX = std::max(minX, avail.right() - windowSize.width() + 1);
+    const int maxY = std::max(minY, avail.bottom() - windowSize.height() + 1);
+
+    return {
+        std::clamp(candidate.x(), minX, maxX),
+        std::clamp(candidate.y(), minY, maxY)
+    };
+}
+
+QRect opaqueBounds(const QImage &image)
+{
+    if (image.isNull())
+        return {};
+
+    const QImage argb = image.convertToFormat(QImage::Format_ARGB32);
+    int minX = argb.width();
+    int minY = argb.height();
+    int maxX = -1;
+    int maxY = -1;
+
+    for (int y = 0; y < argb.height(); ++y)
+    {
+        const QRgb *row = reinterpret_cast<const QRgb *>(argb.constScanLine(y));
+        for (int x = 0; x < argb.width(); ++x)
+        {
+            if (qAlpha(row[x]) <= 3)
+                continue;
+            minX = std::min(minX, x);
+            minY = std::min(minY, y);
+            maxX = std::max(maxX, x);
+            maxY = std::max(maxY, y);
+        }
+    }
+
+    if (maxX < minX || maxY < minY)
+        return {};
+    return QRect(QPoint(minX, minY), QPoint(maxX, maxY));
+}
+}
 
 // ── Random animation pool (idle candidates) ────────────────────────────────
 static const QStringList s_randomPool = {
@@ -32,9 +94,33 @@ static const QStringList s_randomPool = {
     QStringLiteral("watch"),
 };
 
+static const QStringList s_clickRandomPool = {
+    QStringLiteral("hello"),
+    QStringLiteral("excited"),
+    QStringLiteral("heart"),
+    QStringLiteral("jump"),
+    QStringLiteral("rotate"),
+    QStringLiteral("hairflip"),
+    QStringLiteral("watch"),
+    QStringLiteral("drink"),
+    QStringLiteral("listenmusic"),
+    QStringLiteral("notlistenmusic"),
+    QStringLiteral("punching"),
+};
+
 const QStringList &PetWindow::randomPool()
 {
     return s_randomPool;
+}
+
+const QStringList &PetWindow::clickRandomPool()
+{
+    return s_clickRandomPool;
+}
+
+bool PetWindow::isAngryLocked() const
+{
+    return m_angryLocked;
 }
 
 // ── Constructor ─────────────────────────────────────────────────────────────
@@ -42,13 +128,16 @@ const QStringList &PetWindow::randomPool()
 PetWindow::PetWindow(QWidget *parent)
     : QWidget(parent)
 {
+    m_startupTimestamp = QDateTime::currentMSecsSinceEpoch();
+
     // Window: frameless, always-on-top, no taskbar entry
     setWindowFlags(Qt::FramelessWindowHint
                    | Qt::WindowStaysOnTopHint
                    | Qt::Tool);
 
     // Transparent background (OS-level compositing)
-    setAttribute(Qt::WA_TranslucentBackground);
+    setAttribute(Qt::WA_TranslucentBackground, true);
+    setAttribute(Qt::WA_NoSystemBackground, true);
     // Keep alive when "closed" so the tray can re-show us
     setAttribute(Qt::WA_DeleteOnClose, false);
     // Receive mouseMoveEvent even without a button pressed (needed for mask)
@@ -81,6 +170,9 @@ PetWindow::PetWindow(QWidget *parent)
     setupTray();
     restorePosition();
     goIdle();
+
+    QTimer::singleShot(350, this, [this] { ensureVisibleNow(); });
+    QTimer::singleShot(1200, this, [this] { ensureVisibleNow(); });
 }
 
 PetWindow::~PetWindow()
@@ -121,13 +213,12 @@ void PetWindow::setupTray()
 
 void PetWindow::paintEvent(QPaintEvent *)
 {
-    if (m_currentFrame.isNull())
-        return;
-
     QPainter p(this);
-    // CompositionMode_Source: fully replace destination incl. alpha channel
     p.setCompositionMode(QPainter::CompositionMode_Source);
-    p.drawPixmap(rect(), m_currentFrame);
+    p.fillRect(rect(), Qt::transparent);
+
+    if (!m_currentFrame.isNull())
+    p.drawPixmap(m_frameDrawOffset, m_currentFrame);
 }
 
 // ── Frame update + mask ──────────────────────────────────────────────────────
@@ -135,20 +226,63 @@ void PetWindow::paintEvent(QPaintEvent *)
 void PetWindow::onFrameChanged(const QPixmap &pixmap)
 {
     m_currentFrame = pixmap;
+
+    m_frameDrawOffset = {};
+    if (!m_currentFrame.isNull())
+    {
+        const QImage frameImage = m_currentFrame.toImage();
+        const QRect bounds = opaqueBounds(frameImage);
+        if (!bounds.isNull())
+        {
+            if (!m_anchorReady)
+            {
+                m_anchorOpaqueRect = bounds;
+                m_anchorReady = true;
+            }
+            else
+            {
+                const int anchorCenterX = m_anchorOpaqueRect.left() + (m_anchorOpaqueRect.width() - 1) / 2;
+                const int frameCenterX  = bounds.left() + (bounds.width() - 1) / 2;
+                const int dx = anchorCenterX - frameCenterX;
+                const int dy = m_anchorOpaqueRect.bottom() - bounds.bottom();
+
+                m_frameDrawOffset = {
+                    std::clamp(dx, -80, 80),
+                    std::clamp(dy, -80, 80)
+                };
+            }
+        }
+    }
+
     updateMask();
     update();
+
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    if (now - m_startupTimestamp < 3000 && !isVisible())
+        ensureVisibleNow();
 }
 
 void PetWindow::updateMask()
 {
     if (m_currentFrame.isNull())
+    {
+        clearMask();
         return;
+    }
 
-    // MaskOutColor: bit = 1 where pixel != Qt::transparent  →  mouse-clickable
-    // bit = 0  →  mouse events fall through to windows below
-    const QBitmap mask =
-        m_currentFrame.createMaskFromColor(Qt::transparent, Qt::MaskOutColor);
-    setMask(mask);
+    QImage canvas(size(), QImage::Format_ARGB32_Premultiplied);
+    canvas.fill(Qt::transparent);
+    {
+        QPainter painter(&canvas);
+        painter.setCompositionMode(QPainter::CompositionMode_Source);
+        painter.drawPixmap(m_frameDrawOffset, m_currentFrame);
+    }
+
+    const QBitmap mask = QBitmap::fromImage(canvas.createAlphaMask());
+    if (mask.isNull())
+        clearMask();
+    else
+        setMask(mask);
 }
 
 // ── Mouse interaction ────────────────────────────────────────────────────────
@@ -157,6 +291,12 @@ void PetWindow::mousePressEvent(QMouseEvent *event)
 {
     if (event->button() == Qt::LeftButton)
     {
+        if (isAngryLocked())
+        {
+            event->accept();
+            return;
+        }
+
         const qint64 now = QDateTime::currentMSecsSinceEpoch();
 
         // ── Rapid-click detection (angry) ─────────────────────────────────
@@ -220,9 +360,12 @@ void PetWindow::mouseReleaseEvent(QMouseEvent *event)
 
         if (!m_movedDuringPress && elapsed < 300)
         {
-            // Short tap with no movement → hello
+            // Short tap with no movement → random animation (includes hello)
+            const auto &pool = clickRandomPool();
+            const QString name = pool.at(static_cast<int>(
+                QRandomGenerator::global()->bounded(static_cast<uint>(pool.size()))));
             m_state = State::Animating;
-            m_engine->play(QStringLiteral("hello"), [this] { goIdle(); });
+            m_engine->play(name, [this] { goIdle(); });
         }
         else if (m_pendingDizzy)
         {
@@ -247,6 +390,12 @@ void PetWindow::mouseReleaseEvent(QMouseEvent *event)
 
 void PetWindow::contextMenuEvent(QContextMenuEvent *event)
 {
+    if (isAngryLocked())
+    {
+        event->accept();
+        return;
+    }
+
     if (m_state == State::Idle)
     {
         m_state = State::Animating;
@@ -284,6 +433,12 @@ void PetWindow::cancelRandom()
 
 void PetWindow::onRandomTimer()
 {
+    if (isAngryLocked())
+    {
+        scheduleRandom();
+        return;
+    }
+
     if (m_state != State::Idle)
     {
         scheduleRandom(); // Try again later
@@ -302,6 +457,9 @@ void PetWindow::onRandomTimer()
 
 void PetWindow::triggerAngry()
 {
+    if (isAngryLocked())
+        return;
+
     cancelRandom();
     m_fallLingerTimer->stop();
     m_state = State::Animating;
@@ -315,11 +473,18 @@ void PetWindow::triggerAngry()
         return;
     }
 
-    m_engine->play(QStringLiteral("angry"), [this] { goIdle(); });
+    m_angryLocked = true;
+    m_engine->play(QStringLiteral("angry"), [this] {
+        m_angryLocked = false;
+        goIdle();
+    });
 }
 
 void PetWindow::triggerCry()
 {
+    if (isAngryLocked())
+        return;
+
     cancelRandom();
     m_fallLingerTimer->stop();
     m_state = State::Animating;
@@ -330,6 +495,9 @@ void PetWindow::triggerCry()
 
 void PetWindow::onFallLingerTimeout()
 {
+    if (isAngryLocked())
+        return;
+
     // Only fire if the pet is still quietly idle after a fall
     if (m_state != State::Idle)
         return;
@@ -372,9 +540,23 @@ void PetWindow::onShakeCheckTimeout()
 
 void PetWindow::onTrayActivated(QSystemTrayIcon::ActivationReason reason)
 {
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    if (now - m_startupTimestamp < 1500)
+        return;
+
     // Left-click on tray icon: toggle visibility
     if (reason == QSystemTrayIcon::Trigger)
         toggleVisibility();
+}
+
+void PetWindow::ensureVisibleNow()
+{
+    move(clampToVisibleArea(pos(), size()));
+    if (!isVisible())
+        show();
+    setWindowState((windowState() & ~Qt::WindowMinimized) | Qt::WindowActive);
+    raise();
+    activateWindow();
 }
 
 void PetWindow::toggleVisibility()
@@ -383,6 +565,7 @@ void PetWindow::toggleVisibility()
         hide();
     else
     {
+        move(clampToVisibleArea(pos(), size()));
         show();
         raise();
         activateWindow();
@@ -391,7 +574,7 @@ void PetWindow::toggleVisibility()
 
 void PetWindow::doFeed()
 {
-    if (m_state == State::Dragging) return;
+    if (m_state == State::Dragging || isAngryLocked()) return;
     cancelRandom();
     m_state = State::Animating;
     m_engine->play(QStringLiteral("eatcake"), [this] { goIdle(); });
@@ -399,7 +582,7 @@ void PetWindow::doFeed()
 
 void PetWindow::doDance()
 {
-    if (m_state == State::Dragging) return;
+    if (m_state == State::Dragging || isAngryLocked()) return;
     cancelRandom();
     m_state = State::Animating;
     m_engine->play(QStringLiteral("rolling"), [this] { goIdle(); });
@@ -407,7 +590,7 @@ void PetWindow::doDance()
 
 void PetWindow::doSleep()
 {
-    if (m_state == State::Dragging) return;
+    if (m_state == State::Dragging || isAngryLocked()) return;
     cancelRandom();
     m_state = State::Animating;
     m_engine->play(QStringLiteral("sleep"), [this] { goIdle(); });
@@ -450,5 +633,6 @@ void PetWindow::restorePosition()
         defaultPos = {avail.right() - 240 - 24, avail.bottom() - 240 - 64};
     }
 
-    move(s.value(QStringLiteral("pos"), defaultPos).toPoint());
+    const QPoint savedPos = s.value(QStringLiteral("pos"), defaultPos).toPoint();
+    move(clampToVisibleArea(savedPos, size()));
 }

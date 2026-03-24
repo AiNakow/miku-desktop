@@ -1,5 +1,15 @@
 #include "AnimationEngine.h"
 
+#include <QCoreApplication>
+#include <QDir>
+#include <QFileInfo>
+#include <QImage>
+#include <QPainter>
+#include <array>
+#include <cmath>
+
+static constexpr double kPlaybackSpeedScale = 0.82;
+
 // ── Static animation definitions ──────────────────────────────────────────────
 // Keep in sync with drawable-hdpi/ frame counts.
 static const QMap<QString, AnimDef> s_defs = {
@@ -27,6 +37,126 @@ static const QMap<QString, AnimDef> s_defs = {
     {QStringLiteral("sleep"),          {14, 6,  false}},
     {QStringLiteral("watch"),          {8,  8,  false}},
 };
+
+static QString resolveFramePath(const QString &name, int frameIndex)
+{
+    const QString filename = QStringLiteral("%1%2.png")
+                                 .arg(name)
+                                 .arg(frameIndex, 2, 10, QChar('0'));
+
+    const QString resourcePath = QStringLiteral(":/sprites/%1").arg(filename);
+    if (QFileInfo::exists(resourcePath))
+        return resourcePath;
+
+    const QStringList fallbackDirs = {
+        QDir::currentPath() + QStringLiteral("/drawable-hdpi"),
+        QCoreApplication::applicationDirPath() + QStringLiteral("/drawable-hdpi"),
+        QCoreApplication::applicationDirPath() + QStringLiteral("/../drawable-hdpi"),
+        QCoreApplication::applicationDirPath() + QStringLiteral("/../../drawable-hdpi")
+    };
+
+    for (const QString &dir : fallbackDirs)
+    {
+        const QString candidate = QDir(dir).filePath(filename);
+        if (QFileInfo::exists(candidate))
+            return candidate;
+    }
+
+    return resourcePath;
+}
+
+static QPixmap makePlaceholderFrame(const QString &name)
+{
+    QPixmap px(240, 240);
+    px.fill(QColor(255, 0, 255, 180));
+    QPainter painter(&px);
+    painter.setPen(Qt::white);
+    painter.drawText(px.rect(), Qt::AlignCenter, QStringLiteral("Missing\n%1").arg(name));
+    return px;
+}
+
+static bool hasVisiblePixels(const QImage &image)
+{
+    if (image.isNull())
+        return false;
+    if (!image.hasAlphaChannel())
+        return true;
+
+    const QImage argb = image.convertToFormat(QImage::Format_ARGB32);
+    for (int y = 0; y < argb.height(); ++y)
+    {
+        const QRgb *row = reinterpret_cast<const QRgb *>(argb.constScanLine(y));
+        for (int x = 0; x < argb.width(); ++x)
+        {
+            if (qAlpha(row[x]) > 3)
+                return true;
+        }
+    }
+    return false;
+}
+
+static QImage recoverAlphaFromRgb(const QImage &image)
+{
+    QImage out = image.convertToFormat(QImage::Format_ARGB32);
+
+    const std::array<QPoint, 4> samplePoints = {
+        QPoint(0, 0),
+        QPoint(std::max(0, out.width() - 1), 0),
+        QPoint(0, std::max(0, out.height() - 1)),
+        QPoint(std::max(0, out.width() - 1), std::max(0, out.height() - 1))
+    };
+
+    int bgR = 0;
+    int bgG = 0;
+    int bgB = 0;
+    for (const QPoint &pt : samplePoints)
+    {
+        const QRgb c = out.pixel(pt);
+        bgR += qRed(c);
+        bgG += qGreen(c);
+        bgB += qBlue(c);
+    }
+    bgR /= static_cast<int>(samplePoints.size());
+    bgG /= static_cast<int>(samplePoints.size());
+    bgB /= static_cast<int>(samplePoints.size());
+
+    auto isBackgroundLike = [bgR, bgG, bgB](int r, int g, int b) {
+        return std::abs(r - bgR) <= 12
+            && std::abs(g - bgG) <= 12
+            && std::abs(b - bgB) <= 12;
+    };
+
+    for (int y = 0; y < out.height(); ++y)
+    {
+        QRgb *row = reinterpret_cast<QRgb *>(out.scanLine(y));
+        for (int x = 0; x < out.width(); ++x)
+        {
+            const int r = qRed(row[x]);
+            const int g = qGreen(row[x]);
+            const int b = qBlue(row[x]);
+            if (qAlpha(row[x]) != 0)
+                continue;
+
+            if (isBackgroundLike(r, g, b))
+                row[x] = qRgba(r, g, b, 0);
+            else
+                row[x] = qRgba(r, g, b, 255);
+        }
+    }
+    return out;
+}
+
+static QPixmap loadFramePixmap(const QString &path)
+{
+    QImage image(path);
+    if (image.isNull())
+        return {};
+
+    if (!hasVisiblePixels(image))
+        image = recoverAlphaFromRgb(image);
+
+    return QPixmap::fromImage(image);
+}
 
 const QMap<QString, AnimDef> &AnimationEngine::defs()
 {
@@ -58,12 +188,9 @@ void AnimationEngine::loadClip(const QString &name, const AnimDef &def)
 
     for (int f = 1; f <= def.frames; ++f)
     {
-        const QString path =
-            QStringLiteral(":/sprites/%1%2.png")
-                .arg(name)
-                .arg(f, 2, 10, QChar('0'));
+        const QString path = resolveFramePath(name, f);
 
-        QPixmap px(path);
+        QPixmap px = loadFramePixmap(path);
         if (!px.isNull())
             frames.append(std::move(px));
     }
@@ -84,13 +211,30 @@ void AnimationEngine::play(const QString &name, std::function<void()> onFinished
     m_onFinished   = std::move(onFinished);
 
     const AnimDef &def = s_defs.value(name);
-    m_timer.setInterval(1000 / def.fps);
+    const int effectiveFps = std::max(1, static_cast<int>(std::lround(def.fps * kPlaybackSpeedScale)));
+    m_timer.setInterval(1000 / effectiveFps);
     m_timer.start();
 
     // Emit the very first frame without waiting for the first tick
+    if (m_sprites.value(name).isEmpty())
+        loadClip(name, s_defs.value(name));
+
     const auto &frames = m_sprites.value(name);
     if (!frames.isEmpty())
+    {
         emit frameChanged(frames[0]);
+        return;
+    }
+
+    m_timer.stop();
+    emit frameChanged(makePlaceholderFrame(name));
+
+    if (m_onFinished)
+    {
+        auto cb = std::move(m_onFinished);
+        m_onFinished = nullptr;
+        cb();
+    }
 }
 
 void AnimationEngine::stop()

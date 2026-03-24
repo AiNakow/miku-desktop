@@ -64,6 +64,27 @@ target_link_libraries(MikuPet PRIVATE Qt6::Widgets)
 target_compile_definitions(MikuPet PRIVATE
     APP_VERSION="${PROJECT_VERSION}")
 
+if(WIN32)
+  get_target_property(_qmake_executable Qt6::qmake IMPORTED_LOCATION)
+  if(_qmake_executable)
+    get_filename_component(_qt_bin_dir "${_qmake_executable}" DIRECTORY)
+    find_program(WINDEPLOYQT_EXECUTABLE
+      NAMES windeployqt
+      HINTS "${_qt_bin_dir}")
+    if(WINDEPLOYQT_EXECUTABLE)
+      add_custom_command(TARGET MikuPet POST_BUILD
+        COMMAND "${WINDEPLOYQT_EXECUTABLE}"
+                --no-translations
+                --verbose 0
+                "$<TARGET_FILE:MikuPet>"
+        COMMENT "Deploying Qt runtime (windeployqt)"
+        VERBATIM)
+    else()
+      message(WARNING "windeployqt not found; MikuPet.exe may fail to run outside a Qt-configured environment.")
+    endif()
+  endif()
+endif()
+
 # ── Install rules ─────────────────────────────────────────────────────────────
 include(GNUInstallDirs)
 

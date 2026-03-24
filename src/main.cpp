@@ -17,6 +17,9 @@ int main(int argc, char *argv[])
 
     PetWindow pet;
     pet.show();
+    pet.setWindowState((pet.windowState() & ~Qt::WindowMinimized) | Qt::WindowActive);
+    pet.raise();
+    pet.activateWindow();
 
     return app.exec();
 }

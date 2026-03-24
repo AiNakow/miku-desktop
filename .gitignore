@@ -24,3 +24,5 @@ cmake/toolchain-aarch64-linux.cmake
 # OS
 .DS_Store
 Thumbs.db
+
+*.log

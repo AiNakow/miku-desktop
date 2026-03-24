@@ -64,6 +64,8 @@ private:
     void restorePosition();
     void triggerAngry();
     void triggerCry();
+    void ensureVisibleNow();
+    bool isAngryLocked() const;
 
     // ── Sub-objects ────────────────────────────────────────────────────────
     AnimationEngine   *m_engine{nullptr};
@@ -77,6 +79,10 @@ private:
     // ── Animation state ────────────────────────────────────────────────────
     State   m_state{State::Idle};
     QPixmap m_currentFrame;
+    QPoint  m_frameDrawOffset{0, 0};
+    QRect   m_anchorOpaqueRect;
+    bool    m_anchorReady{false};
+    bool    m_angryLocked{false};
 
     // ── Drag tracking ──────────────────────────────────────────────────────
     QPoint  m_dragOffset;           ///< cursor offset from window top-left
@@ -101,7 +107,9 @@ private:
     // ── Angry-count (cry) tracking ───────────────────────────────────────────
     int m_angryTriggerCount{0}; ///< how many times angry has been triggered
     static constexpr int kCryAfterAngryCount = 5;
+    qint64 m_startupTimestamp{0};
 
     // ── Random pool ─────────────────────────────────────────────────────────
     static const QStringList &randomPool();
+    static const QStringList &clickRandomPool();
 };
