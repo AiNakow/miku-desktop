@@ -42,12 +42,6 @@ jobs:
             cmake_generator: Ninja
             cmake_extra: ""
 
-          # ── macOS x86_64 (Intel) ──────────────────────────────────────────────
-          - os: macos-13
-            label: macos-x86_64
-            cmake_generator: Ninja
-            cmake_extra: ""
-
     runs-on: ${{ matrix.os }}
     name: ${{ matrix.label }}
 
@@ -84,7 +78,19 @@ jobs:
           arch: 'win64_msvc2022_64'
           cache: true
 
-      - name: Install Qt6 (Windows aarch64)
+      - name: Install Qt6 (Windows aarch64) - x64 host tools
+        if: matrix.label == 'windows-aarch64'
+        uses: jurplel/install-qt-action@v3
+        with:
+          version: '6.8.1'
+          host: 'windows'
+          target: 'desktop'
+          arch: 'win64_msvc2022_64'
+          dir: '${{ github.workspace }}/QtHost'
+          set-env: false
+          cache: true
+
+      - name: Install Qt6 (Windows aarch64) - arm64 target
         if: matrix.label == 'windows-aarch64'
         uses: jurplel/install-qt-action@v3
         with:
@@ -93,14 +99,13 @@ jobs:
           target: 'desktop'
           arch: 'win64_msvc2022_arm64'
           dir: '${{ github.workspace }}/Qt'
-          extra: '--autodesktop'
           cache: true
 
       - name: Set QT_HOST_PATH (Windows aarch64)
         if: matrix.label == 'windows-aarch64'
         shell: bash
         run: |
-          echo "QT_HOST_PATH=${{ github.workspace }}/Qt/6.8.1/msvc2022_64" >> $GITHUB_ENV
+          echo "QT_HOST_PATH=${{ github.workspace }}/QtHost/6.8.1/msvc2022_64" >> $GITHUB_ENV
 
       # ── Configure ────────────────────────────────────────────────────────────
       - name: Configure CMake
@@ -154,6 +159,7 @@ jobs:
             --appdir AppDir \
             --executable AppDir/usr/bin/MikuPet \
             --desktop-file MikuPet.desktop \
+            --icon-file drawable-hdpi/def01.png \
             --plugin qt \
             --output appimage
         env:
@@ -161,6 +167,10 @@ jobs:
           VERSION: ${{ github.ref_name }}
 
       # ── Package (CPack) ───────────────────────────────────────────────────────
+      - name: Install NSIS (Windows)
+        if: runner.os == 'Windows'
+        run: choco install nsis -y --no-progress
+
       - name: Package (CPack)
         if: runner.os == 'Windows' || runner.os == 'Linux'
         working-directory: build
