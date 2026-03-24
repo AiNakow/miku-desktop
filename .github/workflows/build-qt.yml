@@ -176,9 +176,23 @@ jobs:
       - name: Deploy Qt runtime (macOS)
         if: runner.os == 'macOS'
         run: |
+          macdeployqt build/MikuPet.app -codesign=-
           codesign --force --deep --sign - --timestamp=none build/MikuPet.app
           codesign --verify --deep --strict --verbose=2 build/MikuPet.app
-          macdeployqt build/MikuPet.app -dmg
+          rm -rf build/dmg-root
+          mkdir -p build/dmg-root
+          ditto build/MikuPet.app build/dmg-root/MikuPet.app
+          rm -f build/MikuPet.dmg
+          hdiutil create \
+            -volname "MikuPet" \
+            -srcfolder build/dmg-root \
+            -ov -format UDZO \
+            build/MikuPet.dmg
+          rm -rf build/dmg-mount
+          mkdir -p build/dmg-mount
+          hdiutil attach build/MikuPet.dmg -nobrowse -readonly -mountpoint build/dmg-mount
+          codesign --verify --deep --strict --verbose=2 build/dmg-mount/MikuPet.app
+          hdiutil detach build/dmg-mount
 
       - name: Create AppImage (Linux x86_64)
         if: matrix.label == 'linux-x86_64'
