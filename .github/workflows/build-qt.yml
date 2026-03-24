@@ -15,31 +15,38 @@ jobs:
           # ── Linux x86_64 ────────────────────────────────────────────────────
           - os: ubuntu-22.04
             label: linux-x86_64
+            cmake_generator: Ninja
             cmake_extra: ""
 
-          # ── Linux aarch64 (cross-compile) ────────────────────────────────────
-          - os: ubuntu-22.04
+          # ── Linux aarch64 (native ARM64 runner) ──────────────────────────────
+          - os: ubuntu-22.04-arm
             label: linux-aarch64
-            cmake_extra: >-
-              -DCMAKE_TOOLCHAIN_FILE=$GITHUB_WORKSPACE/cmake/toolchain-aarch64-linux.cmake
-              -DCMAKE_CROSSCOMPILING=ON
+            cmake_generator: Ninja
+            cmake_extra: ""
 
           # ── Windows x86_64 ──────────────────────────────────────────────────
           - os: windows-latest
             label: windows-x86_64
-            cmake_extra: ""
+            cmake_generator: "Visual Studio 17 2022"
+            cmake_extra: "-A x64"
 
           # ── Windows aarch64 ─────────────────────────────────────────────────
           - os: windows-latest
             label: windows-aarch64
-            cmake_extra: >-
-              -A ARM64
+            cmake_generator: "Visual Studio 17 2022"
+            cmake_extra: "-A ARM64"
 
-          # ── macOS Universal ──────────────────────────────────────────────────
+          # ── macOS arm64 (Apple Silicon) ───────────────────────────────────────
           - os: macos-latest
-            label: macos-universal
-            cmake_extra: >-
-              -DCMAKE_OSX_ARCHITECTURES="x86_64;arm64"
+            label: macos-arm64
+            cmake_generator: Ninja
+            cmake_extra: ""
+
+          # ── macOS x86_64 (Intel) ──────────────────────────────────────────────
+          - os: macos-13
+            label: macos-x86_64
+            cmake_generator: Ninja
+            cmake_extra: ""
 
     runs-on: ${{ matrix.os }}
     name: ${{ matrix.label }}
@@ -48,7 +55,7 @@ jobs:
       # ── Checkout ─────────────────────────────────────────────────────────────
       - uses: actions/checkout@v4
 
-      # ── Linux: install Qt6 + CMake + cross-compilation tools ─────────────────
+      # ── Linux: install Qt6 + CMake ────────────────────────────────────────────
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
         run: |
@@ -57,24 +64,7 @@ jobs:
             cmake ninja-build \
             qt6-base-dev libgl1-mesa-dev \
             libxkbcommon-dev \
-            gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
             qt6-base-dev-tools
-
-      # ── Write aarch64 toolchain file (Linux only) ────────────────────────────
-      - name: Write aarch64 toolchain
-        if: matrix.label == 'linux-aarch64'
-        run: |
-          mkdir -p cmake
-          cat > cmake/toolchain-aarch64-linux.cmake << 'EOF'
-          set(CMAKE_SYSTEM_NAME Linux)
-          set(CMAKE_SYSTEM_PROCESSOR aarch64)
-          set(CMAKE_C_COMPILER   aarch64-linux-gnu-gcc)
-          set(CMAKE_CXX_COMPILER aarch64-linux-gnu-g++)
-          set(CMAKE_FIND_ROOT_PATH /usr/aarch64-linux-gnu)
-          set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
-          set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
-          set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
-          EOF
 
       # ── macOS: install Qt6 via Homebrew ───────────────────────────────────────
       - name: Install macOS dependencies
@@ -102,15 +92,28 @@ jobs:
           host: 'windows'
           target: 'desktop'
           arch: 'win64_msvc2022_arm64'
+          dir: '${{ github.workspace }}/Qt'
+          extra: '--autodesktop'
           cache: true
+
+      - name: Set QT_HOST_PATH (Windows aarch64)
+        if: matrix.label == 'windows-aarch64'
+        shell: bash
+        run: |
+          echo "QT_HOST_PATH=${{ github.workspace }}/Qt/6.8.1/msvc2022_64" >> $GITHUB_ENV
 
       # ── Configure ────────────────────────────────────────────────────────────
       - name: Configure CMake
         shell: bash
         run: |
+          HOST_EXTRA=""
+          if [[ -n "${QT_HOST_PATH}" ]]; then
+            HOST_EXTRA="-DQT_HOST_PATH=$(cygpath -m "${QT_HOST_PATH}")"
+          fi
           cmake -B build \
-            -G Ninja \
+            -G "${{ matrix.cmake_generator }}" \
             -DCMAKE_BUILD_TYPE=Release \
+            ${HOST_EXTRA} \
             ${{ matrix.cmake_extra }}
 
       # ── Build ─────────────────────────────────────────────────────────────────
@@ -123,7 +126,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p build/deploy
-          cp build/MikuPet.exe build/deploy/
+          cp build/Release/MikuPet.exe build/deploy/
           windeployqt --release --no-translations build/deploy/MikuPet.exe
 
       - name: Deploy Qt runtime (macOS)
@@ -138,10 +141,19 @@ jobs:
           wget -q https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage
           chmod +x linuxdeploy*.AppImage
           cmake --install build --prefix AppDir/usr
+          # Create a minimal .desktop file required by linuxdeploy
+          cat > MikuPet.desktop << 'EOF'
+          [Desktop Entry]
+          Type=Application
+          Name=MikuPet
+          Exec=MikuPet
+          Icon=MikuPet
+          Categories=Utility;
+          EOF
           ./linuxdeploy-x86_64.AppImage \
             --appdir AppDir \
             --executable AppDir/usr/bin/MikuPet \
-            --desktop-file /dev/null \
+            --desktop-file MikuPet.desktop \
             --plugin qt \
             --output appimage
         env:
@@ -160,7 +172,7 @@ jobs:
         with:
           name: miku-pet-qt-${{ matrix.label }}
           path: |
-            build/*.exe
+            build/deploy/
             build/*.msi
             build/*.zip
             build/*.deb
