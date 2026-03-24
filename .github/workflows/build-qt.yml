@@ -176,6 +176,8 @@ jobs:
       - name: Deploy Qt runtime (macOS)
         if: runner.os == 'macOS'
         run: |
+          codesign --force --deep --sign - --timestamp=none build/MikuPet.app
+          codesign --verify --deep --strict --verbose=2 build/MikuPet.app
           macdeployqt build/MikuPet.app -dmg
 
       - name: Create AppImage (Linux x86_64)
