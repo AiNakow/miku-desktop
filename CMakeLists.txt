@@ -73,8 +73,8 @@ else()
   install(TARGETS MikuPet RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 endif()
 
-# ── Qt runtime deployment (Qt 6.3+) ──────────────────────────────────────────
-if(NOT CMAKE_CROSSCOMPILING)
+# ── Qt runtime deployment (Qt 6.3+ only) ─────────────────────────────────────
+if(NOT CMAKE_CROSSCOMPILING AND Qt6_VERSION VERSION_GREATER_EQUAL "6.3.0")
   qt_generate_deploy_app_script(
       TARGET MikuPet
       OUTPUT_SCRIPT _deploy_script
