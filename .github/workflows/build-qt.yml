@@ -134,7 +134,29 @@ jobs:
         run: |
           mkdir -p build/deploy
           cp build/Release/MikuPet.exe build/deploy/
-          windeployqt --release --no-translations build/deploy/MikuPet.exe
+
+          WINDEPLOYQT=""
+          if [[ "${{ matrix.label }}" == "windows-aarch64" ]]; then
+            CANDIDATE="${{ github.workspace }}/QtHost/Qt/6.8.1/msvc2022_64/bin/windeployqt.exe"
+            if [[ -f "$CANDIDATE" ]]; then
+              WINDEPLOYQT="$CANDIDATE"
+            fi
+          fi
+
+          if [[ -z "$WINDEPLOYQT" ]]; then
+            WINDEPLOYQT="$(command -v windeployqt || true)"
+          fi
+
+          if [[ -z "$WINDEPLOYQT" ]]; then
+            WINDEPLOYQT="$(find "${{ github.workspace }}" -type f -name windeployqt.exe | head -n 1)"
+          fi
+
+          if [[ -z "$WINDEPLOYQT" ]]; then
+            echo "windeployqt.exe not found"
+            exit 1
+          fi
+
+          "$WINDEPLOYQT" --release --no-translations build/deploy/MikuPet.exe
 
       - name: Deploy Qt runtime (macOS)
         if: runner.os == 'macOS'
