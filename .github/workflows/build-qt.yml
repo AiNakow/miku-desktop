@@ -262,7 +262,7 @@ jobs:
               if [[ -f "${QT_TARGET_PATH}/plugins/styles/${style_plugin}" ]]; then
                 cp "${QT_TARGET_PATH}/plugins/styles/${style_plugin}" "build/deploy/styles/"
               fi
-            fi
+            done
           fi
 
       - name: Validate deployed arch (Windows aarch64)
