@@ -211,7 +211,19 @@ jobs:
 
           echo "Using ARM64 target path: ${QT_TARGET_PATH}"
 
-          cp "${QT_TARGET_PATH}/bin"/Qt6*.dll build/deploy/
+          required_qt_dlls=(
+            Qt6Core.dll
+            Qt6Gui.dll
+            Qt6Widgets.dll
+          )
+
+          for dll in "${required_qt_dlls[@]}"; do
+            if [[ ! -f "${QT_TARGET_PATH}/bin/${dll}" ]]; then
+              echo "Required ARM64 Qt DLL missing: ${QT_TARGET_PATH}/bin/${dll}"
+              exit 1
+            fi
+            cp "${QT_TARGET_PATH}/bin/${dll}" build/deploy/
+          done
 
           for runtime_dll in opengl32sw.dll d3dcompiler_47.dll dxcompiler.dll dxil.dll; do
             if [[ -f "${QT_TARGET_PATH}/bin/${runtime_dll}" ]]; then
@@ -220,14 +232,38 @@ jobs:
           done
 
           mkdir -p build/deploy/platforms
+          if [[ ! -f "${QT_TARGET_PATH}/plugins/platforms/qwindows.dll" ]]; then
+            echo "Required ARM64 platform plugin missing: ${QT_TARGET_PATH}/plugins/platforms/qwindows.dll"
+            exit 1
+          fi
           cp "${QT_TARGET_PATH}/plugins/platforms/qwindows.dll" build/deploy/platforms/
 
-          for plugin_dir in generic iconengines imageformats networkinformation styles tls; do
-            if [[ -d "${QT_TARGET_PATH}/plugins/${plugin_dir}" ]]; then
-              mkdir -p "build/deploy/${plugin_dir}"
-              cp -r "${QT_TARGET_PATH}/plugins/${plugin_dir}/." "build/deploy/${plugin_dir}/"
+          if [[ -d "${QT_TARGET_PATH}/plugins/imageformats" ]]; then
+            mkdir -p "build/deploy/imageformats"
+            for image_plugin in qico.dll qjpeg.dll qgif.dll qwebp.dll qsvg.dll; do
+              if [[ -f "${QT_TARGET_PATH}/plugins/imageformats/${image_plugin}" ]]; then
+                cp "${QT_TARGET_PATH}/plugins/imageformats/${image_plugin}" "build/deploy/imageformats/"
+              fi
+            done
+          fi
+
+          if [[ -d "${QT_TARGET_PATH}/plugins/iconengines" ]]; then
+            mkdir -p "build/deploy/iconengines"
+            for icon_plugin in qsvgicon.dll; do
+              if [[ -f "${QT_TARGET_PATH}/plugins/iconengines/${icon_plugin}" ]]; then
+                cp "${QT_TARGET_PATH}/plugins/iconengines/${icon_plugin}" "build/deploy/iconengines/"
+              fi
+            done
+          fi
+
+          if [[ -d "${QT_TARGET_PATH}/plugins/styles" ]]; then
+            mkdir -p "build/deploy/styles"
+            for style_plugin in qmodernwindowsstyle.dll qwindowsvistastyle.dll; do
+              if [[ -f "${QT_TARGET_PATH}/plugins/styles/${style_plugin}" ]]; then
+                cp "${QT_TARGET_PATH}/plugins/styles/${style_plugin}" "build/deploy/styles/"
+              fi
             fi
-          done
+          fi
 
       - name: Validate deployed arch (Windows aarch64)
         if: matrix.label == 'windows-aarch64'
