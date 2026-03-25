@@ -103,14 +103,17 @@ jobs:
           target: 'desktop'
           arch: 'win64_msvc2022_arm64_cross_compiled'
           dir: '${{ github.workspace }}/Qt'
+          set-env: false
           extra: '--base https://download.qt.io'
           cache: true
 
-      - name: Set QT_HOST_PATH (Windows aarch64)
+      - name: Set Qt paths (Windows aarch64)
         if: matrix.label == 'windows-aarch64'
         shell: bash
         run: |
           echo "QT_HOST_PATH=${{ github.workspace }}/QtHost/Qt/6.8.1/msvc2022_64" >> $GITHUB_ENV
+          echo "QT_TARGET_PATH=${{ github.workspace }}/Qt/Qt/6.8.1/msvc2022_arm64_cross_compiled" >> $GITHUB_ENV
+          echo "CMAKE_PREFIX_PATH=${{ github.workspace }}/Qt/Qt/6.8.1/msvc2022_arm64_cross_compiled" >> $GITHUB_ENV
 
       # ── Configure ────────────────────────────────────────────────────────────
       - name: Configure CMake
@@ -147,15 +150,26 @@ jobs:
           WINDEPLOYQT=""
           QT_PATHS_ARG=""
           if [[ "${{ matrix.label }}" == "windows-aarch64" ]]; then
-            CANDIDATE="${{ github.workspace }}/Qt/Qt/6.8.1/msvc2022_arm64/bin/windeployqt.exe"
-            if [[ -f "$CANDIDATE" ]]; then
-              WINDEPLOYQT="$CANDIDATE"
-            fi
+            HOST_WINDEPLOYQT="${{ github.workspace }}/QtHost/Qt/6.8.1/msvc2022_64/bin/windeployqt.exe"
+            QT_PATHS="${QT_TARGET_PATH}/bin/qtpaths.exe"
 
-            QT_PATHS="${{ github.workspace }}/Qt/Qt/6.8.1/msvc2022_arm64/bin/qtpaths.exe"
             if [[ -f "$QT_PATHS" ]]; then
               QT_PATHS_ARG="--qtpaths $(cygpath -m "$QT_PATHS")"
+            else
+              echo "ARM64 qtpaths.exe not found: $QT_PATHS"
+              exit 1
             fi
+
+            if [[ -f "$HOST_WINDEPLOYQT" ]]; then
+              WINDEPLOYQT="$HOST_WINDEPLOYQT"
+            else
+              echo "Host windeployqt.exe not found for ARM64 deployment: $HOST_WINDEPLOYQT"
+              exit 1
+            fi
+
+            echo "Using ARM64 target path: ${QT_TARGET_PATH}"
+            echo "Using host windeployqt: ${WINDEPLOYQT}"
+            echo "Using target qtpaths: ${QT_PATHS}"
           fi
 
           if [[ -z "$WINDEPLOYQT" ]]; then
@@ -171,7 +185,46 @@ jobs:
             exit 1
           fi
 
-          "$WINDEPLOYQT" --release --compiler-runtime --no-translations ${QT_PATHS_ARG} build/deploy/MikuPet.exe
+          "$WINDEPLOYQT" --release --verbose 2 --compiler-runtime --no-translations ${QT_PATHS_ARG} build/deploy/MikuPet.exe
+
+      - name: Validate deployed arch (Windows aarch64)
+        if: matrix.label == 'windows-aarch64'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          function Get-MachineType {
+            param([string]$FilePath)
+
+            $bytes = [System.IO.File]::ReadAllBytes($FilePath)
+            if ($bytes.Length -lt 0x100) { return 'Unknown' }
+
+            $peOffset = [BitConverter]::ToInt32($bytes, 0x3C)
+            if ($peOffset + 6 -gt $bytes.Length) { return 'Unknown' }
+            if ($bytes[$peOffset] -ne 0x50 -or $bytes[$peOffset + 1] -ne 0x45) { return 'Unknown' }
+
+            $machine = [BitConverter]::ToUInt16($bytes, $peOffset + 4)
+            switch ($machine) {
+              0xAA64 { 'ARM64' }
+              0x8664 { 'x64' }
+              0x014C { 'x86' }
+              default { ('0x{0:X4}' -f $machine) }
+            }
+          }
+
+          $files = Get-ChildItem -Path 'build/deploy/*' -File -Include *.exe,*.dll
+          $report = foreach ($file in $files) {
+            [PSCustomObject]@{
+              File = $file.Name
+              Arch = Get-MachineType -FilePath $file.FullName
+            }
+          }
+
+          $bad = $report | Where-Object { $_.Arch -eq 'x64' -or $_.Arch -eq 'x86' }
+          if ($bad) {
+            $bad | Format-Table -AutoSize
+            throw 'Found non-ARM64 binaries in windows-aarch64 deploy output.'
+          }
 
       - name: Package portable bundle (Windows)
         if: runner.os == 'Windows'
