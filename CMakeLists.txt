@@ -31,6 +31,57 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 
+# ── App icon generation ──────────────────────────────────────────────────────
+set(MIKUPET_APP_ICON_SOURCE "${CMAKE_SOURCE_DIR}/assets/app-icon.png" CACHE FILEPATH
+    "Source PNG used to generate Windows/macOS/Linux app icons")
+set(_MIKUPET_ICON_SOURCE_EFFECTIVE "${MIKUPET_APP_ICON_SOURCE}")
+if(NOT EXISTS "${_MIKUPET_ICON_SOURCE_EFFECTIVE}")
+  set(_MIKUPET_ICON_SOURCE_EFFECTIVE "${CMAKE_SOURCE_DIR}/drawable-hdpi/def01.png")
+  message(WARNING
+    "Icon source ${MIKUPET_APP_ICON_SOURCE} was not found. Falling back to ${_MIKUPET_ICON_SOURCE_EFFECTIVE}")
+endif()
+
+set(MIKUPET_ICON_OUTPUT_DIR "${CMAKE_BINARY_DIR}/generated-icons")
+set(MIKUPET_WINDOWS_ICON   "${MIKUPET_ICON_OUTPUT_DIR}/windows/mikupet.ico")
+set(MIKUPET_MACOS_ICON     "${MIKUPET_ICON_OUTPUT_DIR}/macos/mikupet.icns")
+
+find_package(Python3 COMPONENTS Interpreter)
+if(Python3_Interpreter_FOUND)
+  execute_process(
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/generate_icons.py"
+              --input "${_MIKUPET_ICON_SOURCE_EFFECTIVE}"
+              --output-dir "${MIKUPET_ICON_OUTPUT_DIR}"
+              --name "mikupet"
+      WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+      RESULT_VARIABLE _icon_gen_result
+      OUTPUT_VARIABLE _icon_gen_stdout
+      ERROR_VARIABLE _icon_gen_stderr)
+  if(NOT _icon_gen_result EQUAL 0)
+    message(WARNING "Icon generation failed: ${_icon_gen_stderr}")
+  endif()
+else()
+  message(WARNING "Python3 interpreter not found; app icon files will not be generated automatically.")
+endif()
+
+set(PLATFORM_SOURCES)
+if(WIN32)
+  list(APPEND PLATFORM_SOURCES src/platform/windows.rc)
+  if(EXISTS "${MIKUPET_WINDOWS_ICON}")
+    set(_MIKUPET_WINDOWS_ICON_RC "${CMAKE_BINARY_DIR}/mikupet-appicon.rc")
+    file(GENERATE OUTPUT "${_MIKUPET_WINDOWS_ICON_RC}"
+      CONTENT "IDI_APP_ICON ICON \"${MIKUPET_WINDOWS_ICON}\"\n")
+    list(APPEND PLATFORM_SOURCES "${_MIKUPET_WINDOWS_ICON_RC}")
+  else()
+    message(WARNING "Windows icon file not found: ${MIKUPET_WINDOWS_ICON}")
+  endif()
+elseif(APPLE)
+  if(EXISTS "${MIKUPET_MACOS_ICON}")
+    list(APPEND PLATFORM_SOURCES "${MIKUPET_MACOS_ICON}")
+  else()
+    message(WARNING "macOS icon file not found: ${MIKUPET_MACOS_ICON}")
+  endif()
+endif()
+
 # ── Qt 6 ─────────────────────────────────────────────────────────────────────
 find_package(Qt6 REQUIRED COMPONENTS Widgets)
 # qt_standard_project_setup() requires Qt 6.3+; AUTOMOC/AUTORCC are set above.
@@ -50,7 +101,6 @@ endforeach()
 
 # ── Platform-specific executable flags ───────────────────────────────────────
 if(WIN32)
-  set(PLATFORM_SOURCES src/platform/windows.rc)
   qt_add_executable(MikuPet WIN32
       src/main.cpp
       src/AnimationEngine.h
@@ -67,7 +117,8 @@ elseif(APPLE)
       src/AnimationEngine.h
       src/AnimationEngine.cpp
       src/PetWindow.h
-      src/PetWindow.cpp)
+      src/PetWindow.cpp
+      ${PLATFORM_SOURCES})
 else()
   qt_add_executable(MikuPet
       src/main.cpp
@@ -87,6 +138,13 @@ target_link_libraries(MikuPet PRIVATE Qt6::Widgets)
 
 target_compile_definitions(MikuPet PRIVATE
   APP_VERSION="${MIKUPET_VERSION}")
+
+if(APPLE AND EXISTS "${MIKUPET_MACOS_ICON}")
+  set_source_files_properties("${MIKUPET_MACOS_ICON}" PROPERTIES
+      MACOSX_PACKAGE_LOCATION "Resources")
+  set_target_properties(MikuPet PROPERTIES
+      MACOSX_BUNDLE_ICON_FILE "mikupet.icns")
+endif()
 
 if(WIN32)
   get_target_property(_qmake_executable Qt6::qmake IMPORTED_LOCATION)
@@ -116,6 +174,25 @@ if(APPLE)
   install(TARGETS MikuPet BUNDLE DESTINATION .)
 else()
   install(TARGETS MikuPet RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+endif()
+
+if(UNIX AND NOT APPLE)
+  foreach(_size 16 24 32 48 64 128 256 512)
+    set(_linux_icon "${MIKUPET_ICON_OUTPUT_DIR}/linux/hicolor/${_size}x${_size}/apps/mikupet.png")
+    if(EXISTS "${_linux_icon}")
+      install(FILES "${_linux_icon}"
+          DESTINATION "${CMAKE_INSTALL_DATADIR}/icons/hicolor/${_size}x${_size}/apps")
+    endif()
+  endforeach()
+
+  set(MIKUPET_DESKTOP_EXEC "MikuPet")
+  set(MIKUPET_DESKTOP_ICON "mikupet")
+  configure_file(
+      "${CMAKE_SOURCE_DIR}/src/platform/mikupet.desktop.in"
+      "${CMAKE_BINARY_DIR}/mikupet.desktop"
+      @ONLY)
+  install(FILES "${CMAKE_BINARY_DIR}/mikupet.desktop"
+      DESTINATION "${CMAKE_INSTALL_DATADIR}/applications")
 endif()
 
 # ── Qt runtime deployment (Qt 6.3+ only) ─────────────────────────────────────
@@ -150,6 +227,10 @@ if(WIN32)
     "CreateShortCut '$SMPROGRAMS\\\\MikuPet\\\\MikuPet.lnk' '$INSTDIR\\\\bin\\\\MikuPet.exe'")
   set(CPACK_NSIS_DELETE_ICONS_EXTRA
     "Delete '$SMPROGRAMS\\\\MikuPet\\\\MikuPet.lnk'")
+  if(EXISTS "${MIKUPET_WINDOWS_ICON}")
+    set(CPACK_NSIS_MUI_ICON "${MIKUPET_WINDOWS_ICON}")
+    set(CPACK_NSIS_INSTALLED_ICON_NAME "bin/MikuPet.exe")
+  endif()
 elseif(APPLE)
   set(CPACK_GENERATOR "DragNDrop")
   set(CPACK_DMG_VOLUME_NAME "MikuPet ${MIKUPET_VERSION}")

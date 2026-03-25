@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=MikuPet
+Comment=Hatsune Miku Desktop Pet
+Exec=@MIKUPET_DESKTOP_EXEC@
+Icon=@MIKUPET_DESKTOP_ICON@
+Terminal=false
+Categories=Utility;Game;
+StartupNotify=false
