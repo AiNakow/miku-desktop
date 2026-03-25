@@ -204,50 +204,30 @@ jobs:
           mkdir -p build/deploy
           cp build/Release/MikuPet.exe build/deploy/
 
-          WINDEPLOYQT=""
-          QT_PATHS=""
-
-          for candidate in \
-            "${QT_TARGET_PATH}/bin/qtpaths6.exe" \
-            "${QT_TARGET_PATH}/bin/qtpaths.exe" \
-            "${QT_TARGET_PATH}/bin/qtpaths6.bat" \
-            "${QT_TARGET_PATH}/bin/qtpaths.bat"; do
-            if [[ -f "$candidate" ]]; then
-              QT_PATHS="$candidate"
-              break
-            fi
-          done
-
-          if [[ -z "$QT_PATHS" ]]; then
-            QT_PATHS="$(find "${QT_TARGET_PATH}" -type f \( -iname 'qtpaths*.exe' -o -iname 'qtpaths*.bat' \) | head -n 1 || true)"
-          fi
-
-          if [[ -z "$QT_PATHS" ]]; then
-            echo "ARM64 target qtpaths not found under target tree: ${QT_TARGET_PATH}"
-            find "${QT_TARGET_PATH}" -maxdepth 6 -type f \( -iname 'qtpaths*' \) | sort || true
-            exit 1
-          fi
-
-          for candidate in \
-            "${QT_HOST_PATH}/bin/windeployqt6.exe" \
-            "${QT_HOST_PATH}/bin/windeployqt.exe"; do
-            if [[ -f "$candidate" ]]; then
-              WINDEPLOYQT="$candidate"
-              break
-            fi
-          done
-
-          if [[ -z "$WINDEPLOYQT" ]]; then
-            echo "Host windeployqt not found under: ${QT_HOST_PATH}/bin"
-            find "${QT_HOST_PATH}" -maxdepth 3 -type f \( -iname 'windeployqt*.exe' \) | sort || true
+          if [[ ! -d "${QT_TARGET_PATH}" ]]; then
+            echo "QT_TARGET_PATH does not exist: ${QT_TARGET_PATH}"
             exit 1
           fi
 
           echo "Using ARM64 target path: ${QT_TARGET_PATH}"
-          echo "Using host windeployqt: ${WINDEPLOYQT}"
-          echo "Using target qtpaths: ${QT_PATHS}"
 
-          "$WINDEPLOYQT" --release --verbose 2 --compiler-runtime --no-translations --qtpaths "$(cygpath -m "$QT_PATHS")" build/deploy/MikuPet.exe
+          cp "${QT_TARGET_PATH}/bin"/Qt6*.dll build/deploy/
+
+          for runtime_dll in opengl32sw.dll d3dcompiler_47.dll dxcompiler.dll dxil.dll; do
+            if [[ -f "${QT_TARGET_PATH}/bin/${runtime_dll}" ]]; then
+              cp "${QT_TARGET_PATH}/bin/${runtime_dll}" build/deploy/
+            fi
+          done
+
+          mkdir -p build/deploy/platforms
+          cp "${QT_TARGET_PATH}/plugins/platforms/qwindows.dll" build/deploy/platforms/
+
+          for plugin_dir in generic iconengines imageformats networkinformation styles tls; do
+            if [[ -d "${QT_TARGET_PATH}/plugins/${plugin_dir}" ]]; then
+              mkdir -p "build/deploy/${plugin_dir}"
+              cp -r "${QT_TARGET_PATH}/plugins/${plugin_dir}/." "build/deploy/${plugin_dir}/"
+            fi
+          done
 
       - name: Validate deployed arch (Windows aarch64)
         if: matrix.label == 'windows-aarch64'
