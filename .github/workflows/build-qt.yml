@@ -209,7 +209,9 @@ jobs:
 
           for candidate in \
             "${QT_TARGET_PATH}/bin/qtpaths6.exe" \
-            "${QT_TARGET_PATH}/bin/qtpaths.exe"; do
+            "${QT_TARGET_PATH}/bin/qtpaths.exe" \
+            "${QT_TARGET_PATH}/bin/qtpaths6.bat" \
+            "${QT_TARGET_PATH}/bin/qtpaths.bat"; do
             if [[ -f "$candidate" ]]; then
               QT_PATHS="$candidate"
               break
@@ -217,8 +219,12 @@ jobs:
           done
 
           if [[ -z "$QT_PATHS" ]]; then
-            echo "ARM64 target qtpaths not found under: ${QT_TARGET_PATH}/bin"
-            find "${QT_TARGET_PATH}" -maxdepth 3 -type f \( -iname 'qtpaths*.exe' \) | sort || true
+            QT_PATHS="$(find "${QT_TARGET_PATH}" -type f \( -iname 'qtpaths*.exe' -o -iname 'qtpaths*.bat' \) | head -n 1 || true)"
+          fi
+
+          if [[ -z "$QT_PATHS" ]]; then
+            echo "ARM64 target qtpaths not found under target tree: ${QT_TARGET_PATH}"
+            find "${QT_TARGET_PATH}" -maxdepth 6 -type f \( -iname 'qtpaths*' \) | sort || true
             exit 1
           fi
 
