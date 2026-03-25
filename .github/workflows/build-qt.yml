@@ -111,9 +111,30 @@ jobs:
         if: matrix.label == 'windows-aarch64'
         shell: bash
         run: |
-          echo "QT_HOST_PATH=${{ github.workspace }}/QtHost/Qt/6.8.1/msvc2022_64" >> $GITHUB_ENV
-          echo "QT_TARGET_PATH=${{ github.workspace }}/Qt/Qt/6.8.1/msvc2022_arm64_cross_compiled" >> $GITHUB_ENV
-          echo "CMAKE_PREFIX_PATH=${{ github.workspace }}/Qt/Qt/6.8.1/msvc2022_arm64_cross_compiled" >> $GITHUB_ENV
+          HOST_ROOT="${{ github.workspace }}/QtHost"
+          TARGET_ROOT="${{ github.workspace }}/Qt"
+
+          QT_HOST_PATH="$(find "$HOST_ROOT" -type d -name msvc2022_64 | head -n 1)"
+          QT_TARGET_PATH="$(find "$TARGET_ROOT" -type d -name msvc2022_arm64_cross_compiled | head -n 1)"
+
+          if [[ -z "$QT_HOST_PATH" ]]; then
+            echo "Could not locate msvc2022_64 under: $HOST_ROOT"
+            find "$HOST_ROOT" -maxdepth 4 -type d | sort
+            exit 1
+          fi
+
+          if [[ -z "$QT_TARGET_PATH" ]]; then
+            echo "Could not locate msvc2022_arm64_cross_compiled under: $TARGET_ROOT"
+            find "$TARGET_ROOT" -maxdepth 5 -type d | sort
+            exit 1
+          fi
+
+          echo "QT_HOST_PATH=$QT_HOST_PATH" >> $GITHUB_ENV
+          echo "QT_TARGET_PATH=$QT_TARGET_PATH" >> $GITHUB_ENV
+          echo "CMAKE_PREFIX_PATH=$QT_TARGET_PATH" >> $GITHUB_ENV
+
+          echo "Resolved QT_HOST_PATH: $QT_HOST_PATH"
+          echo "Resolved QT_TARGET_PATH: $QT_TARGET_PATH"
 
       # ── Configure ────────────────────────────────────────────────────────────
       - name: Configure CMake
@@ -161,7 +182,7 @@ jobs:
           WINDEPLOYQT=""
           QT_PATHS_ARG=""
           if [[ "${{ matrix.label }}" == "windows-aarch64" ]]; then
-            HOST_WINDEPLOYQT="${{ github.workspace }}/QtHost/Qt/6.8.1/msvc2022_64/bin/windeployqt.exe"
+            HOST_WINDEPLOYQT="${QT_HOST_PATH}/bin/windeployqt.exe"
             QT_PATHS="${QT_TARGET_PATH}/bin/qtpaths.exe"
 
             if [[ -f "$QT_PATHS" ]]; then
