@@ -115,7 +115,7 @@ jobs:
           TARGET_ROOT="${{ github.workspace }}/Qt"
 
           QT_HOST_PATH="$(find "$HOST_ROOT" -type d -name msvc2022_64 | head -n 1)"
-          QT_TARGET_PATH="$(find "$TARGET_ROOT" -type d -name msvc2022_arm64_cross_compiled | head -n 1)"
+          QT_TARGET_PATH="$(find "$TARGET_ROOT" -type d \( -name msvc2022_arm64_cross_compiled -o -name msvc2022_arm64 \) | head -n 1)"
 
           if [[ -z "$QT_HOST_PATH" ]]; then
             echo "Could not locate msvc2022_64 under: $HOST_ROOT"
@@ -124,7 +124,7 @@ jobs:
           fi
 
           if [[ -z "$QT_TARGET_PATH" ]]; then
-            echo "Could not locate msvc2022_arm64_cross_compiled under: $TARGET_ROOT"
+            echo "Could not locate msvc2022_arm64_cross_compiled or msvc2022_arm64 under: $TARGET_ROOT"
             find "$TARGET_ROOT" -maxdepth 5 -type d | sort
             exit 1
           fi
