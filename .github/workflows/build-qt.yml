@@ -182,20 +182,39 @@ jobs:
           WINDEPLOYQT=""
           QT_PATHS_ARG=""
           if [[ "${{ matrix.label }}" == "windows-aarch64" ]]; then
-            HOST_WINDEPLOYQT="${QT_HOST_PATH}/bin/windeployqt.exe"
-            QT_PATHS="${QT_TARGET_PATH}/bin/qtpaths.exe"
+            QT_PATHS=""
+            for candidate in \
+              "${QT_TARGET_PATH}/bin/qtpaths6.exe" \
+              "${QT_TARGET_PATH}/bin/qtpaths.exe" \
+              "${QT_HOST_PATH}/bin/qtpaths6.exe" \
+              "${QT_HOST_PATH}/bin/qtpaths.exe"; do
+              if [[ -f "$candidate" ]]; then
+                QT_PATHS="$candidate"
+                break
+              fi
+            done
 
-            if [[ -f "$QT_PATHS" ]]; then
+            if [[ -n "$QT_PATHS" ]]; then
               QT_PATHS_ARG="--qtpaths $(cygpath -m "$QT_PATHS")"
             else
-              echo "ARM64 qtpaths.exe not found: $QT_PATHS"
+              echo "ARM64 qtpaths not found under target/host Qt bin directories"
+              find "${QT_TARGET_PATH}" -maxdepth 3 -type f \( -iname 'qtpaths*.exe' \) | sort || true
+              find "${QT_HOST_PATH}" -maxdepth 3 -type f \( -iname 'qtpaths*.exe' \) | sort || true
               exit 1
             fi
 
-            if [[ -f "$HOST_WINDEPLOYQT" ]]; then
-              WINDEPLOYQT="$HOST_WINDEPLOYQT"
-            else
-              echo "Host windeployqt.exe not found for ARM64 deployment: $HOST_WINDEPLOYQT"
+            for candidate in \
+              "${QT_HOST_PATH}/bin/windeployqt6.exe" \
+              "${QT_HOST_PATH}/bin/windeployqt.exe"; do
+              if [[ -f "$candidate" ]]; then
+                WINDEPLOYQT="$candidate"
+                break
+              fi
+            done
+
+            if [[ -z "$WINDEPLOYQT" ]]; then
+              echo "Host windeployqt not found under: ${QT_HOST_PATH}/bin"
+              find "${QT_HOST_PATH}" -maxdepth 3 -type f \( -iname 'windeployqt*.exe' \) | sort || true
               exit 1
             fi
 
@@ -209,7 +228,11 @@ jobs:
           fi
 
           if [[ -z "$WINDEPLOYQT" ]]; then
-            WINDEPLOYQT="$(find "${{ github.workspace }}" -type f -name windeployqt.exe | head -n 1)"
+            WINDEPLOYQT="$(command -v windeployqt6 || true)"
+          fi
+
+          if [[ -z "$WINDEPLOYQT" ]]; then
+            WINDEPLOYQT="$(find "${{ github.workspace }}" -type f \( -name windeployqt.exe -o -name windeployqt6.exe \) | head -n 1)"
           fi
 
           if [[ -z "$WINDEPLOYQT" ]]; then
