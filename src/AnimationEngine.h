@@ -33,6 +33,11 @@ public:
     /// Must be called once before play().
     void preload();
 
+    /// Update target device pixel ratio used for sprite selection.
+    /// Rebuilds cache and refreshes the currently displayed frame if needed.
+    void setDevicePixelRatio(qreal dpr);
+    [[nodiscard]] qreal devicePixelRatio() const { return m_devicePixelRatio; }
+
     /// Start playing clip @p name. @p onFinished is called (once) when a
     /// non-looping animation reaches its last frame. Passing nullptr is safe.
     void play(const QString &name, std::function<void()> onFinished = nullptr);
@@ -62,5 +67,6 @@ private:
     QString                          m_currentAnim;
     int                              m_currentFrame{0};
     bool                             m_loaded{false};
+    qreal                            m_devicePixelRatio{1.0};
     std::function<void()>            m_onFinished;
 };

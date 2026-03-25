@@ -42,7 +42,10 @@ foreach(anim
     sleep watch)
   file(GLOB _files CONFIGURE_DEPENDS
       "${CMAKE_SOURCE_DIR}/drawable-hdpi/${anim}[0-9][0-9].png")
+  file(GLOB _files_hidpi CONFIGURE_DEPENDS
+      "${CMAKE_SOURCE_DIR}/drawable-hdpi/${anim}[0-9][0-9]@*.png")
   list(APPEND SPRITE_FILES ${_files})
+  list(APPEND SPRITE_FILES ${_files_hidpi})
 endforeach()
 
 # ── Platform-specific executable flags ───────────────────────────────────────

@@ -2,9 +2,12 @@
 #include "AnimationEngine.h"
 
 #include <QApplication>
+#include <QAction>
+#include <QActionGroup>
 #include <QBitmap>
 #include <QCloseEvent>
 #include <QContextMenuEvent>
+#include <QCursor>
 #include <QDateTime>
 #include <QGuiApplication>
 #include <QMenu>
@@ -14,8 +17,16 @@
 #include <QScreen>
 #include <QSettings>
 #include <QTime>
+#include <QWindow>
 #include <algorithm>
 #include <cmath>
+
+#ifdef Q_OS_WIN
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 
 namespace
 {
@@ -146,12 +157,14 @@ PetWindow::PetWindow(QWidget *parent)
     // Receive mouseMoveEvent even without a button pressed (needed for mask)
     setMouseTracking(true);
 
-    setFixedSize(240, 240);
+    setFixedSize(kBasePetSize, kBasePetSize);
+    setupDpiTracking();
 
     // ── Animation engine ──────────────────────────────────────────────────
     m_engine = new AnimationEngine(this);
     connect(m_engine, &AnimationEngine::frameChanged,
             this,     &PetWindow::onFrameChanged);
+        refreshDpr();
     m_engine->preload();
 
     // ── Random idle timer ─────────────────────────────────────────────────
@@ -191,6 +204,79 @@ PetWindow::~PetWindow()
     savePosition();
 }
 
+void PetWindow::setupDpiTracking()
+{
+    winId();
+
+    if (windowHandle())
+    {
+        connect(windowHandle(), &QWindow::screenChanged,
+                this, [this](QScreen *screen) {
+                    bindScreenSignals(screen);
+                    refreshDpr();
+                });
+        bindScreenSignals(windowHandle()->screen());
+    }
+    else
+    {
+        bindScreenSignals(QGuiApplication::primaryScreen());
+    }
+}
+
+void PetWindow::bindScreenSignals(QScreen *screen)
+{
+    if (m_boundScreen == screen)
+        return;
+
+    if (m_boundScreen)
+        disconnect(m_boundScreen, nullptr, this, nullptr);
+
+    m_boundScreen = screen;
+    if (!m_boundScreen)
+        return;
+
+    connect(m_boundScreen, &QScreen::logicalDotsPerInchChanged,
+            this, [this](qreal) { refreshDpr(); });
+    connect(m_boundScreen, &QScreen::physicalDotsPerInchChanged,
+            this, [this](qreal) { refreshDpr(); });
+    connect(m_boundScreen, &QScreen::geometryChanged,
+            this, [this](const QRect &) { refreshDpr(); });
+}
+
+void PetWindow::refreshDpr(bool force)
+{
+    QScreen *screen = nullptr;
+    if (windowHandle())
+        screen = windowHandle()->screen();
+    if (!screen)
+        screen = QGuiApplication::screenAt(frameGeometry().center());
+    if (!screen)
+        screen = QGuiApplication::primaryScreen();
+    if (!screen)
+        return;
+
+    bindScreenSignals(screen);
+
+    const qreal dpr = std::max(1.0, screen->devicePixelRatio());
+    const qreal effectiveScale = std::max(1.0, dpr * m_userScale);
+    if (!force
+        && std::abs(dpr - m_lastDpr) < 0.01
+        && std::abs(effectiveScale - m_lastEffectiveScale) < 0.01)
+        return;
+
+    m_lastDpr = dpr;
+    m_lastEffectiveScale = effectiveScale;
+    m_anchorReady = false;
+    m_anchorOpaqueRect = {};
+    m_frameDrawOffset = {};
+
+    if (m_engine)
+        m_engine->setDevicePixelRatio(effectiveScale);
+
+    updateMask();
+    update();
+}
+
 // ── System tray ─────────────────────────────────────────────────────────────
 
 void PetWindow::setupTray()
@@ -202,6 +288,31 @@ void PetWindow::setupTray()
     auto *menu      = new QMenu(this);
     auto *actToggle = menu->addAction(tr("显示 / 隐藏  Show/Hide"));
     menu->addSeparator();
+    auto *sizeMenu = menu->addMenu(tr("大小  Size"));
+    m_sizeActionGroup = new QActionGroup(sizeMenu);
+    m_sizeActionGroup->setExclusive(true);
+
+    auto addScaleAction = [this, sizeMenu](const QString &label, qreal scale) {
+        QAction *action = sizeMenu->addAction(label);
+        action->setCheckable(true);
+        action->setChecked(std::abs(m_userScale - scale) < 0.01);
+        m_sizeActionGroup->addAction(action);
+        connect(action, &QAction::triggered, this, [this, scale] {
+            applyUserScale(scale, true);
+        });
+    };
+
+    addScaleAction(tr("50%"), 0.5);
+    addScaleAction(tr("75%"), 0.75);
+    addScaleAction(tr("100%"), 1.0);
+    addScaleAction(tr("125%"), 1.25);
+    addScaleAction(tr("150%"), 1.5);
+    addScaleAction(tr("200%"), 2.0);
+
+    sizeMenu->addSeparator();
+    auto *actScaleReset = sizeMenu->addAction(tr("恢复默认  Reset"));
+    connect(actScaleReset, &QAction::triggered, this, [this] { applyUserScale(1.0, true); });
+
     auto *actFeed  = menu->addAction(tr("喂食  Feed"));
     auto *actDance = menu->addAction(tr("跳舞  Dance"));
     auto *actSleep = menu->addAction(tr("睡觉  Sleep"));
@@ -227,9 +338,15 @@ void PetWindow::paintEvent(QPaintEvent *)
     QPainter p(this);
     p.setCompositionMode(QPainter::CompositionMode_Source);
     p.fillRect(rect(), Qt::transparent);
+    p.setRenderHint(QPainter::SmoothPixmapTransform, true);
 
     if (!m_currentFrame.isNull())
-    p.drawPixmap(m_frameDrawOffset, m_currentFrame);
+    {
+        p.save();
+        p.scale(m_userScale, m_userScale);
+        p.drawPixmap(m_frameDrawOffset, m_currentFrame);
+        p.restore();
+    }
 }
 
 // ── Frame update + mask ──────────────────────────────────────────────────────
@@ -277,7 +394,10 @@ void PetWindow::updateMask()
 {
     if (m_currentFrame.isNull())
     {
+        m_alphaCanvas = QImage();
+#ifndef Q_OS_WIN
         clearMask();
+#endif
         return;
     }
 
@@ -286,15 +406,62 @@ void PetWindow::updateMask()
     {
         QPainter painter(&canvas);
         painter.setCompositionMode(QPainter::CompositionMode_Source);
+        painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+        painter.scale(m_userScale, m_userScale);
         painter.drawPixmap(m_frameDrawOffset, m_currentFrame);
     }
 
+    m_alphaCanvas = canvas;
+
+#ifndef Q_OS_WIN
     const QBitmap mask = QBitmap::fromImage(canvas.createAlphaMask());
     if (mask.isNull())
         clearMask();
     else
         setMask(mask);
+#endif
 }
+
+bool PetWindow::isOpaqueAt(const QPoint &localPos) const
+{
+    if (m_alphaCanvas.isNull() || !rect().contains(localPos))
+        return false;
+
+    return qAlpha(m_alphaCanvas.pixel(localPos)) > 3;
+}
+
+#ifdef Q_OS_WIN
+bool PetWindow::nativeEvent(const QByteArray &, void *message, qintptr *result)
+{
+    MSG *msg = static_cast<MSG *>(message);
+    if (!msg)
+        return false;
+
+    if (msg->message == WM_NCHITTEST)
+    {
+        if (m_alphaCanvas.isNull())
+        {
+            *result = HTCLIENT;
+            return true;
+        }
+
+        const QPoint localPos = mapFromGlobal(QCursor::pos());
+        if (!rect().contains(localPos))
+            return false;
+
+        if (!isOpaqueAt(localPos))
+        {
+            *result = HTTRANSPARENT;
+            return true;
+        }
+
+        *result = HTCLIENT;
+        return true;
+    }
+
+    return QWidget::nativeEvent("windows_generic_MSG", message, result);
+}
+#endif
 
 // ── Mouse interaction ────────────────────────────────────────────────────────
 
@@ -621,6 +788,77 @@ void PetWindow::doSleep()
     startSleepLoop();
 }
 
+void PetWindow::setScale50()  { applyUserScale(0.5,  true); }
+void PetWindow::setScale75()  { applyUserScale(0.75, true); }
+void PetWindow::setScale100() { applyUserScale(1.0,  true); }
+void PetWindow::setScale125() { applyUserScale(1.25, true); }
+void PetWindow::setScale150() { applyUserScale(1.5,  true); }
+void PetWindow::setScale200() { applyUserScale(2.0,  true); }
+
+void PetWindow::applyUserScale(qreal scale, bool persist)
+{
+    const qreal clamped = std::clamp(scale, kMinUserScale, kMaxUserScale);
+    if (std::abs(clamped - m_userScale) < 0.01)
+        return;
+
+    const QSize oldSize = size();
+    const QPoint oldPos = pos();
+    const QPoint oldAnchor(oldPos.x() + oldSize.width() / 2,
+                           oldPos.y() + oldSize.height());
+
+    m_userScale = clamped;
+
+    const int edge = std::max(1, static_cast<int>(std::lround(kBasePetSize * m_userScale)));
+    setFixedSize(edge, edge);
+
+    if (m_sizeActionGroup)
+    {
+        for (QAction *action : m_sizeActionGroup->actions())
+        {
+            const QString text = action->text();
+            if (!text.endsWith(QLatin1Char('%')))
+                continue;
+
+            bool ok = false;
+            const qreal pct = text.left(text.size() - 1).toDouble(&ok);
+            if (!ok)
+                continue;
+
+            action->setChecked(std::abs((pct / 100.0) - m_userScale) < 0.01);
+        }
+    }
+
+    const QPoint nextPos(oldAnchor.x() - width() / 2,
+                         oldAnchor.y() - height());
+    move(clampToVisibleArea(nextPos, size()));
+
+    if (m_sizeActionGroup)
+    {
+        for (QAction *action : m_sizeActionGroup->actions())
+        {
+            const QString text = action->text();
+            if (!text.endsWith(QLatin1Char('%')))
+                continue;
+
+            bool ok = false;
+            const qreal pct = text.left(text.size() - 1).toDouble(&ok);
+            if (!ok)
+                continue;
+
+            const qreal actionScale = pct / 100.0;
+            action->setChecked(std::abs(actionScale - m_userScale) < 0.01);
+        }
+    }
+
+    refreshDpr(true);
+
+    if (persist)
+    {
+        QSettings s(QStringLiteral("MikuPet"), QStringLiteral("MikuPet"));
+        s.setValue(QStringLiteral("petScale"), m_userScale);
+    }
+}
+
 void PetWindow::doQuit()
 {
     if (m_quitRequested)
@@ -739,20 +977,29 @@ void PetWindow::savePosition()
 {
     QSettings s(QStringLiteral("MikuPet"), QStringLiteral("MikuPet"));
     s.setValue(QStringLiteral("pos"), pos());
+    s.setValue(QStringLiteral("petScale"), m_userScale);
 }
 
 void PetWindow::restorePosition()
 {
     QSettings s(QStringLiteral("MikuPet"), QStringLiteral("MikuPet"));
 
+    const qreal savedScale = s.value(QStringLiteral("petScale"), 1.0).toDouble();
+    m_userScale = std::clamp(savedScale, kMinUserScale, kMaxUserScale);
+
+    const int edge = std::max(1, static_cast<int>(std::lround(kBasePetSize * m_userScale)));
+    setFixedSize(edge, edge);
+
     // Default: bottom-right corner of the primary screen
     QPoint defaultPos(0, 0);
     if (const auto *screen = QApplication::primaryScreen())
     {
         const QRect avail = screen->availableGeometry();
-        defaultPos = {avail.right() - 240 - 24, avail.bottom() - 240 - 64};
+        defaultPos = {avail.right() - width() - 24, avail.bottom() - height() - 64};
     }
 
     const QPoint savedPos = s.value(QStringLiteral("pos"), defaultPos).toPoint();
     move(clampToVisibleArea(savedPos, size()));
+
+    refreshDpr(true);
 }

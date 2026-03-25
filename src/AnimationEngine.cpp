@@ -5,6 +5,8 @@
 #include <QFileInfo>
 #include <QImage>
 #include <QPainter>
+#include <QStringList>
+#include <algorithm>
 #include <array>
 #include <cmath>
 
@@ -38,31 +40,130 @@ static const QMap<QString, AnimDef> s_defs = {
     {QStringLiteral("watch"),          {8,  8,  false}},
 };
 
-static QString resolveFramePath(const QString &name, int frameIndex)
+struct ResolvedFramePath
 {
-    const QString filename = QStringLiteral("%1%2.png")
+    QString path;
+    qreal   assetScale{1.0};
+};
+
+static qreal folderScaleHint(const QString &folder)
+{
+    if (folder == QStringLiteral("drawable-xxhdpi"))
+        return 3.0;
+    if (folder == QStringLiteral("drawable-xhdpi"))
+        return 2.0;
+    return 1.0;
+}
+
+static QString suffixForScale(qreal scale)
+{
+    if (qFuzzyCompare(scale, 1.0))
+        return {};
+
+    QString number = QString::number(scale, 'f', 2);
+    while (number.endsWith(QLatin1Char('0')))
+        number.chop(1);
+    if (number.endsWith(QLatin1Char('.')))
+        number.chop(1);
+
+    return QStringLiteral("@%1x").arg(number);
+}
+
+static QStringList candidateFolders(qreal scale)
+{
+    if (scale >= 2.75)
+        return {QStringLiteral("drawable-xxhdpi"), QStringLiteral("drawable-xhdpi"), QStringLiteral("drawable-hdpi")};
+    if (scale >= 1.75)
+        return {QStringLiteral("drawable-xhdpi"), QStringLiteral("drawable-hdpi")};
+    return {QStringLiteral("drawable-hdpi"), QStringLiteral("drawable-xhdpi"), QStringLiteral("drawable-xxhdpi")};
+}
+
+static QVector<qreal> preferredScales(qreal targetDpr)
+{
+    QVector<qreal> scales;
+
+    auto pushUnique = [&scales](qreal value) {
+        for (qreal existing : scales)
+        {
+            if (std::abs(existing - value) < 0.01)
+                return;
+        }
+        scales.append(value);
+    };
+
+    if (targetDpr >= 2.75)
+    {
+        pushUnique(3.0);
+        pushUnique(2.0);
+        pushUnique(1.5);
+    }
+    else if (targetDpr >= 1.75)
+    {
+        pushUnique(2.0);
+        pushUnique(1.5);
+    }
+    else if (targetDpr >= 1.35)
+    {
+        pushUnique(1.5);
+        pushUnique(2.0);
+    }
+    else if (targetDpr > 1.01)
+    {
+        pushUnique(1.5);
+        pushUnique(2.0);
+    }
+
+    pushUnique(1.0);
+    return scales;
+}
+
+static ResolvedFramePath resolveFramePath(const QString &name, int frameIndex, qreal targetDpr)
+{
+    const QString stem = QStringLiteral("%1%2")
                                  .arg(name)
                                  .arg(frameIndex, 2, 10, QChar('0'));
 
-    const QString resourcePath = QStringLiteral(":/sprites/%1").arg(filename);
-    if (QFileInfo::exists(resourcePath))
-        return resourcePath;
-
-    const QStringList fallbackDirs = {
-        QDir::currentPath() + QStringLiteral("/drawable-hdpi"),
-        QCoreApplication::applicationDirPath() + QStringLiteral("/drawable-hdpi"),
-        QCoreApplication::applicationDirPath() + QStringLiteral("/../drawable-hdpi"),
-        QCoreApplication::applicationDirPath() + QStringLiteral("/../../drawable-hdpi")
-    };
-
-    for (const QString &dir : fallbackDirs)
+    const QVector<qreal> scales = preferredScales(targetDpr);
+    for (qreal scale : scales)
     {
-        const QString candidate = QDir(dir).filePath(filename);
-        if (QFileInfo::exists(candidate))
-            return candidate;
+        const QString filename = QStringLiteral("%1%2.png").arg(stem, suffixForScale(scale));
+
+        const QString resourcePath = QStringLiteral(":/sprites/%1").arg(filename);
+        if (QFileInfo::exists(resourcePath))
+            return {resourcePath, scale};
+
+        const QString plainResourcePath = QStringLiteral(":/sprites/%1.png").arg(stem);
+        if (qFuzzyCompare(scale, 1.0) && QFileInfo::exists(plainResourcePath))
+            return {plainResourcePath, 1.0};
+
+        const QStringList folderNames = candidateFolders(scale);
+        for (const QString &folder : folderNames)
+        {
+            const qreal folderScale = folderScaleHint(folder);
+            const QStringList fallbackDirs = {
+                QDir::currentPath() + QLatin1Char('/') + folder,
+                QCoreApplication::applicationDirPath() + QLatin1Char('/') + folder,
+                QCoreApplication::applicationDirPath() + QStringLiteral("/../") + folder,
+                QCoreApplication::applicationDirPath() + QStringLiteral("/../../") + folder
+            };
+
+            for (const QString &dir : fallbackDirs)
+            {
+                const QString candidate = QDir(dir).filePath(filename);
+                if (QFileInfo::exists(candidate))
+                    return {candidate, scale};
+
+                if (!qFuzzyCompare(scale, 1.0))
+                {
+                    const QString plainCandidate = QDir(dir).filePath(QStringLiteral("%1.png").arg(stem));
+                    if (QFileInfo::exists(plainCandidate))
+                        return {plainCandidate, folderScale};
+                }
+            }
+        }
     }
 
-    return resourcePath;
+    return {QStringLiteral(":/sprites/%1.png").arg(stem), 1.0};
 }
 
 static QPixmap makePlaceholderFrame(const QString &name)
@@ -188,14 +289,53 @@ void AnimationEngine::loadClip(const QString &name, const AnimDef &def)
 
     for (int f = 1; f <= def.frames; ++f)
     {
-        const QString path = resolveFramePath(name, f);
+        const ResolvedFramePath resolved = resolveFramePath(name, f, m_devicePixelRatio);
 
-        QPixmap px = loadFramePixmap(path);
+        QPixmap px = loadFramePixmap(resolved.path);
         if (!px.isNull())
+        {
+            px.setDevicePixelRatio(std::max(1.0, resolved.assetScale));
             frames.append(std::move(px));
+        }
     }
 
     m_sprites.insert(name, std::move(frames));
+}
+
+void AnimationEngine::setDevicePixelRatio(qreal dpr)
+{
+    const qreal normalized = std::max(1.0, dpr);
+    if (std::abs(normalized - m_devicePixelRatio) < 0.01)
+        return;
+
+    m_devicePixelRatio = normalized;
+
+    const QString currentAnim = m_currentAnim;
+    const int currentFrame = m_currentFrame;
+    const bool timerWasActive = m_timer.isActive();
+    const int timerInterval = m_timer.interval();
+
+    m_timer.stop();
+    m_sprites.clear();
+    preload();
+
+    if (currentAnim.isEmpty())
+        return;
+
+    const auto &frames = m_sprites.value(currentAnim);
+    if (frames.isEmpty())
+        return;
+
+    m_currentAnim = currentAnim;
+    const int maxFrameIndex = std::max(0, static_cast<int>(frames.size()) - 1);
+    m_currentFrame = std::clamp(currentFrame, 0, maxFrameIndex);
+    emit frameChanged(frames[m_currentFrame]);
+
+    if (timerWasActive)
+    {
+        m_timer.setInterval(timerInterval);
+        m_timer.start();
+    }
 }
 
 // ── Playback control ──────────────────────────────────────────────────────────

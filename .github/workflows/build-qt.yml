@@ -61,7 +61,8 @@ jobs:
             cmake ninja-build \
             qt6-base-dev libgl1-mesa-dev \
             libxkbcommon-dev \
-            qt6-base-dev-tools
+            qt6-base-dev-tools \
+            wget imagemagick patchelf file
 
       # ── macOS: install Qt6 via Homebrew ───────────────────────────────────────
       - name: Install macOS dependencies
@@ -333,15 +334,37 @@ jobs:
           codesign --verify --deep --strict --verbose=2 build/dmg-mount/MikuPet.app
           hdiutil detach build/dmg-mount
 
-      - name: Create AppImage (Linux x86_64)
-        if: matrix.label == 'linux-x86_64'
+      - name: Create AppImage (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
         run: |
-          wget -q https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
-          wget -q https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage
-          chmod +x linuxdeploy*.AppImage
+          APPIMAGE_ARCH=""
+          case "$(uname -m)" in
+            x86_64|amd64)
+              APPIMAGE_ARCH="x86_64"
+              ;;
+            aarch64|arm64)
+              APPIMAGE_ARCH="aarch64"
+              ;;
+            *)
+              echo "Unsupported Linux architecture: $(uname -m)"
+              exit 1
+              ;;
+          esac
+
+          LINUXDEPLOY_BIN="linuxdeploy-${APPIMAGE_ARCH}.AppImage"
+          LINUXDEPLOY_QT_PLUGIN="linuxdeploy-plugin-qt-${APPIMAGE_ARCH}.AppImage"
+
+          wget -q "https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/${LINUXDEPLOY_BIN}"
+          wget -q "https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/${LINUXDEPLOY_QT_PLUGIN}"
+
+          chmod +x "${LINUXDEPLOY_BIN}" "${LINUXDEPLOY_QT_PLUGIN}"
+
           cmake --install build --prefix AppDir/usr
+
           # Resize sprite to a standard 256x256 icon size required by linuxdeploy
           convert drawable-hdpi/def01.png -resize 256x256 MikuPet.png
+
           # Create a minimal .desktop file required by linuxdeploy
           cat > MikuPet.desktop << 'EOF'
           [Desktop Entry]
@@ -351,15 +374,37 @@ jobs:
           Icon=MikuPet
           Categories=Utility;
           EOF
-          ./linuxdeploy-x86_64.AppImage \
+
+          QMAKE_BIN="$(command -v qmake6 || command -v qmake || true)"
+          if [[ -z "${QMAKE_BIN}" && -x "/usr/lib/qt6/bin/qmake" ]]; then
+            QMAKE_BIN="/usr/lib/qt6/bin/qmake"
+          fi
+
+          if [[ -z "${QMAKE_BIN}" ]]; then
+            echo "qmake/qmake6 not found"
+            exit 1
+          fi
+
+          export QMAKE="${QMAKE_BIN}"
+          export APPIMAGE_EXTRACT_AND_RUN=1
+
+          "./${LINUXDEPLOY_BIN}" \
             --appdir AppDir \
             --executable AppDir/usr/bin/MikuPet \
             --desktop-file MikuPet.desktop \
             --icon-file MikuPet.png \
             --plugin qt \
             --output appimage
+
+          APPIMAGE_FILE="$(ls -1 MikuPet*.AppImage | head -n 1)"
+          if [[ -z "${APPIMAGE_FILE}" || ! -f "${APPIMAGE_FILE}" ]]; then
+            echo "AppImage was not produced"
+            exit 1
+          fi
+
+          mkdir -p build/deploy
+          cp "${APPIMAGE_FILE}" "build/deploy/"
         env:
-          QMAKE: /usr/lib/qt6/bin/qmake
           VERSION: ${{ github.ref_name }}
 
       # ── Package (CPack) ───────────────────────────────────────────────────────

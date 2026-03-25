@@ -1,10 +1,21 @@
 #include "PetWindow.h"
 
 #include <QApplication>
+#include <QGuiApplication>
 #include <QIcon>
+
+#ifdef Q_OS_WIN
+#include <windows.h>
+#endif
 
 int main(int argc, char *argv[])
 {
+#ifdef Q_OS_WIN
+    SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+#endif
+    QGuiApplication::setHighDpiScaleFactorRoundingPolicy(
+        Qt::HighDpiScaleFactorRoundingPolicy::PassThrough);
+
     QApplication app(argc, argv);
     app.setApplicationName(QStringLiteral("MikuPet"));
     app.setApplicationVersion(QStringLiteral("0.1.0"));

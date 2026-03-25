@@ -51,7 +51,7 @@ Write-Host "$ExeName -> $exeArch"
 Write-Host ""
 
 Write-Host "=== Scan EXE/DLL Architectures In Directory ==="
-$files = Get-ChildItem -Path "$AppDir\*" -File -Include *.exe,*.dll
+$files = Get-ChildItem -Path "$AppDir" -Recurse -File -Include *.exe,*.dll
 $report = foreach ($f in $files) {
   [PSCustomObject]@{
     File = $f.Name

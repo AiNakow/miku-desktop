@@ -6,6 +6,9 @@
 #include <QTimer>
 #include <QWidget>
 
+class QScreen;
+class QActionGroup;
+
 class AnimationEngine;
 
 /**
@@ -41,6 +44,9 @@ protected:
     void mouseReleaseEvent(QMouseEvent *event) override;
     void contextMenuEvent(QContextMenuEvent *event) override;
     void closeEvent(QCloseEvent *event) override;
+#ifdef Q_OS_WIN
+    bool nativeEvent(const QByteArray &eventType, void *message, qintptr *result) override;
+#endif
 
 private slots:
     void onFrameChanged(const QPixmap &pixmap);
@@ -54,6 +60,12 @@ private slots:
     void toggleVisibility();
     void onFallLingerTimeout();
     void onShakeCheckTimeout();
+    void setScale50();
+    void setScale75();
+    void setScale100();
+    void setScale125();
+    void setScale150();
+    void setScale200();
 
 private:
     enum class State { Idle, Animating, Dragging };
@@ -74,10 +86,16 @@ private:
     bool isNightSleepWindow() const;
     void ensureVisibleNow();
     bool isAngryLocked() const;
+    void setupDpiTracking();
+    void bindScreenSignals(QScreen *screen);
+    void refreshDpr(bool force = false);
+    bool isOpaqueAt(const QPoint &localPos) const;
+    void applyUserScale(qreal scale, bool persist);
 
     // ── Sub-objects ────────────────────────────────────────────────────────
     AnimationEngine   *m_engine{nullptr};
     QSystemTrayIcon   *m_tray{nullptr};
+    QActionGroup      *m_sizeActionGroup{nullptr};
     QTimer            *m_randomTimer{nullptr};
     /// Checks inactivity and local time to trigger auto-sleep loop at night
     QTimer            *m_sleepCheckTimer{nullptr};
@@ -121,6 +139,15 @@ private:
     bool m_quitRequested{false};
     bool m_sleepLooping{false};
     qint64 m_lastClickTimestamp{0};
+    qreal m_lastDpr{1.0};
+    qreal m_userScale{1.0};
+    qreal m_lastEffectiveScale{1.0};
+    QScreen *m_boundScreen{nullptr};
+    QImage m_alphaCanvas;
+
+    static constexpr int   kBasePetSize = 240;
+    static constexpr qreal kMinUserScale = 0.5;
+    static constexpr qreal kMaxUserScale = 2.0;
 
     static constexpr int    kNightSleepStartHour = 21;
     static constexpr int    kNightSleepEndHour   = 7;
