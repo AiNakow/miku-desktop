@@ -120,8 +120,18 @@ jobs:
         shell: bash
         run: |
           HOST_EXTRA=""
+          QT_EXTRA=""
           if [[ -n "${QT_HOST_PATH}" ]]; then
             HOST_EXTRA="-DQT_HOST_PATH=$(cygpath -m "${QT_HOST_PATH}")"
+          fi
+
+          if [[ -n "${QT_TARGET_PATH}" ]]; then
+            if [[ ! -d "${QT_TARGET_PATH}" ]]; then
+              echo "QT_TARGET_PATH does not exist: ${QT_TARGET_PATH}"
+              exit 1
+            fi
+            QT_PREFIX_PATH="$(cygpath -m "${QT_TARGET_PATH}")"
+            QT_EXTRA="-DCMAKE_PREFIX_PATH=${QT_PREFIX_PATH} -DQt6_DIR=${QT_PREFIX_PATH}/lib/cmake/Qt6"
           fi
 
           BUILD_TAG="${GITHUB_REF_NAME}"
@@ -133,6 +143,7 @@ jobs:
             -DMIKUPET_TAG="${BUILD_TAG}" \
             -DMIKUPET_VERSION_OVERRIDE="${BUILD_VERSION}" \
             ${HOST_EXTRA} \
+            ${QT_EXTRA} \
             ${{ matrix.cmake_extra }}
 
       # ── Build ─────────────────────────────────────────────────────────────────
